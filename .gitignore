@@ -1,0 +1,5 @@
+# Local OpenCode deepwork state
+.slim/deepwork/
+
+# Local OpenCode project state
+.opencode/
