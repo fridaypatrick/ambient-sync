@@ -1,0 +1,411 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {
+	};
+	objectVersion = 77;
+	objects = {
+
+/* Begin PBXBuildFile section */
+		A10000000000000000000011 /* AppDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000111 /* AppDelegate.swift */; };
+		A10000000000000000000012 /* AppearanceHysteresis.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000112 /* AppearanceHysteresis.swift */; };
+		A10000000000000000000013 /* BrightnessLogic.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000113 /* BrightnessLogic.swift */; };
+		A10000000000000000000014 /* DisplayIdentity.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000114 /* DisplayIdentity.swift */; };
+		A10000000000000000000015 /* SettingsStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000115 /* SettingsStore.swift */; };
+		A10000000000000000000016 /* AppKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = A10000000000000000000201 /* AppKit.framework */; };
+		A10000000000000000000017 /* Foundation.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = A10000000000000000000202 /* Foundation.framework */; };
+		A10000000000000000000021 /* LogicTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000121 /* LogicTests.swift */; };
+		A10000000000000000000022 /* XCTest.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = A10000000000000000000203 /* XCTest.framework */; };
+
+/* End PBXBuildFile section */
+
+/* Begin PBXFileReference section */
+		A10000000000000000000101 /* AmbientSync.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = AmbientSync.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		A10000000000000000000102 /* AmbientSyncTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = AmbientSyncTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		A10000000000000000000111 /* AppDelegate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppDelegate.swift; sourceTree = "<group>"; };
+		A10000000000000000000112 /* AppearanceHysteresis.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppearanceHysteresis.swift; sourceTree = "<group>"; };
+		A10000000000000000000113 /* BrightnessLogic.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BrightnessLogic.swift; sourceTree = "<group>"; };
+		A10000000000000000000114 /* DisplayIdentity.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DisplayIdentity.swift; sourceTree = "<group>"; };
+		A10000000000000000000115 /* SettingsStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsStore.swift; sourceTree = "<group>"; };
+		A10000000000000000000116 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
+		A10000000000000000000121 /* LogicTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LogicTests.swift; sourceTree = "<group>"; };
+		A10000000000000000000122 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
+		A10000000000000000000201 /* AppKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = AppKit.framework; path = System/Library/Frameworks/AppKit.framework; sourceTree = SDKROOT; };
+		A10000000000000000000202 /* Foundation.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Foundation.framework; path = System/Library/Frameworks/Foundation.framework; sourceTree = SDKROOT; };
+		A10000000000000000000203 /* XCTest.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = XCTest.framework; path = System/Library/Frameworks/XCTest.framework; sourceTree = SDKROOT; };
+
+/* End PBXFileReference section */
+
+/* Begin PBXFrameworksBuildPhase section */
+		A10000000000000000000301 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				A10000000000000000000016 /* AppKit.framework in Frameworks */,
+				A10000000000000000000017 /* Foundation.framework in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		A10000000000000000000302 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				A10000000000000000000022 /* XCTest.framework in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+
+/* End PBXFrameworksBuildPhase section */
+
+/* Begin PBXGroup section */
+		A10000000000000000000401 = {
+			isa = PBXGroup;
+			children = (
+				A10000000000000000000411 /* AmbientSync */,
+				A10000000000000000000412 /* AmbientSyncTests */,
+				A10000000000000000000413 /* Products */,
+				A10000000000000000000414 /* Frameworks */,
+			);
+			sourceTree = "<group>";
+		};
+		A10000000000000000000411 /* AmbientSync */ = {
+			isa = PBXGroup;
+			children = (
+				A10000000000000000000111 /* AppDelegate.swift */,
+				A10000000000000000000112 /* AppearanceHysteresis.swift */,
+				A10000000000000000000113 /* BrightnessLogic.swift */,
+				A10000000000000000000114 /* DisplayIdentity.swift */,
+				A10000000000000000000115 /* SettingsStore.swift */,
+				A10000000000000000000116 /* Info.plist */,
+			);
+			path = AmbientSync;
+			sourceTree = "<group>";
+		};
+		A10000000000000000000412 /* AmbientSyncTests */ = {
+			isa = PBXGroup;
+			children = (
+				A10000000000000000000121 /* LogicTests.swift */,
+				A10000000000000000000122 /* Info.plist */,
+			);
+			path = AmbientSyncTests;
+			sourceTree = "<group>";
+		};
+		A10000000000000000000413 /* Products */ = {
+			isa = PBXGroup;
+			children = (
+				A10000000000000000000101 /* AmbientSync.app */,
+				A10000000000000000000102 /* AmbientSyncTests.xctest */,
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
+		A10000000000000000000414 /* Frameworks */ = {
+			isa = PBXGroup;
+			children = (
+				A10000000000000000000201 /* AppKit.framework */,
+				A10000000000000000000202 /* Foundation.framework */,
+				A10000000000000000000203 /* XCTest.framework */,
+			);
+			name = Frameworks;
+			sourceTree = "<group>";
+		};
+
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+		A10000000000000000000501 /* AmbientSync */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = A10000000000000000000701 /* Build configuration list for PBXNativeTarget "AmbientSync" */;
+			buildPhases = (
+				A10000000000000000000311 /* Sources */,
+				A10000000000000000000301 /* Frameworks */,
+				A10000000000000000000321 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = AmbientSync;
+			productName = AmbientSync;
+			productReference = A10000000000000000000101 /* AmbientSync.app */;
+			productType = "com.apple.product-type.application";
+		};
+		A10000000000000000000502 /* AmbientSyncTests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = A10000000000000000000702 /* Build configuration list for PBXNativeTarget "AmbientSyncTests" */;
+			buildPhases = (
+				A10000000000000000000312 /* Sources */,
+				A10000000000000000000302 /* Frameworks */,
+				A10000000000000000000322 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				A10000000000000000000601 /* PBXTargetDependency */,
+			);
+			name = AmbientSyncTests;
+			productName = AmbientSyncTests;
+			productReference = A10000000000000000000102 /* AmbientSyncTests.xctest */;
+			productType = "com.apple.product-type.bundle.unit-test";
+		};
+
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		A10000000000000000000001 /* Project object */ = {
+			isa = PBXProject;
+			attributes = {
+				LastSwiftUpdateCheck = 2660;
+				LastUpgradeCheck = 2660;
+				TargetAttributes = {
+					A10000000000000000000501 = {
+						CreatedOnToolsVersion = 26.6;
+					};
+					A10000000000000000000502 = {
+						CreatedOnToolsVersion = 26.6;
+						TestTargetID = A10000000000000000000501;
+					};
+				};
+			};
+			buildConfigurationList = A10000000000000000000700 /* Build configuration list for PBXProject "AmbientSync" */;
+			compatibilityVersion = "Xcode 3.2";
+			developmentRegion = en;
+			hasScannedForEncodings = 0;
+			knownRegions = (
+				en,
+				Base,
+			);
+			mainGroup = A10000000000000000000401;
+			productRefGroup = A10000000000000000000413 /* Products */;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (
+				A10000000000000000000501 /* AmbientSync */,
+				A10000000000000000000502 /* AmbientSyncTests */,
+			);
+		};
+
+/* End PBXProject section */
+
+/* Begin PBXResourcesBuildPhase section */
+		A10000000000000000000321 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		A10000000000000000000322 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+
+/* End PBXResourcesBuildPhase section */
+
+/* Begin PBXSourcesBuildPhase section */
+		A10000000000000000000311 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				A10000000000000000000011 /* AppDelegate.swift in Sources */,
+				A10000000000000000000012 /* AppearanceHysteresis.swift in Sources */,
+				A10000000000000000000013 /* BrightnessLogic.swift in Sources */,
+				A10000000000000000000014 /* DisplayIdentity.swift in Sources */,
+				A10000000000000000000015 /* SettingsStore.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		A10000000000000000000312 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				A10000000000000000000021 /* LogicTests.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+
+/* End PBXSourcesBuildPhase section */
+
+/* Begin PBXTargetDependency section */
+		A10000000000000000000601 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = A10000000000000000000501 /* AmbientSync */;
+			targetProxy = A10000000000000000000611 /* PBXContainerItemProxy */;
+		};
+
+/* End PBXTargetDependency section */
+
+/* Begin PBXContainerItemProxy section */
+		A10000000000000000000611 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = A10000000000000000000001 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = A10000000000000000000501;
+			remoteInfo = AmbientSync;
+		};
+
+/* End PBXContainerItemProxy section */
+
+/* Begin XCBuildConfiguration section */
+		A10000000000000000000801 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu17;
+				MACOSX_DEPLOYMENT_TARGET = 26.0;
+				SDKROOT = macosx;
+				SWIFT_STRICT_CONCURRENCY = complete;
+				SWIFT_VERSION = 6.0;
+			};
+			name = Debug;
+		};
+		A10000000000000000000802 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu17;
+				MACOSX_DEPLOYMENT_TARGET = 26.0;
+				SDKROOT = macosx;
+				SWIFT_STRICT_CONCURRENCY = complete;
+				SWIFT_VERSION = 6.0;
+			};
+			name = Release;
+		};
+		A10000000000000000000811 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ARCHS = arm64;
+				CLANG_ENABLE_MODULES = YES;
+				CODE_SIGN_IDENTITY = "-";
+				COMBINE_HIDPI_IMAGES = YES;
+				CURRENT_PROJECT_VERSION = 1;
+				ENABLE_TESTABILITY = YES;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = AmbientSync/Info.plist;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+				);
+				MACOSX_DEPLOYMENT_TARGET = 26.0;
+				PRODUCT_BUNDLE_IDENTIFIER = cloud.piatkowski.AmbientSync;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SUPPORTED_PLATFORMS = macosx;
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_VERSION = 6.0;
+			};
+			name = Debug;
+		};
+		A10000000000000000000812 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ARCHS = arm64;
+				CLANG_ENABLE_MODULES = YES;
+				CODE_SIGN_IDENTITY = "-";
+				COMBINE_HIDPI_IMAGES = YES;
+				CURRENT_PROJECT_VERSION = 1;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = AmbientSync/Info.plist;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+				);
+				MACOSX_DEPLOYMENT_TARGET = 26.0;
+				PRODUCT_BUNDLE_IDENTIFIER = cloud.piatkowski.AmbientSync;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SUPPORTED_PLATFORMS = macosx;
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_VERSION = 6.0;
+			};
+			name = Release;
+		};
+		A10000000000000000000821 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ARCHS = arm64;
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CLANG_ENABLE_MODULES = YES;
+				CODE_SIGN_IDENTITY = "-";
+				CURRENT_PROJECT_VERSION = 1;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = AmbientSyncTests/Info.plist;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+					"@loader_path/../Frameworks",
+				);
+				MACOSX_DEPLOYMENT_TARGET = 26.0;
+				PRODUCT_BUNDLE_IDENTIFIER = cloud.piatkowski.AmbientSyncTests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SUPPORTED_PLATFORMS = macosx;
+				SWIFT_VERSION = 6.0;
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/AmbientSync.app/Contents/MacOS/AmbientSync";
+			};
+			name = Debug;
+		};
+		A10000000000000000000822 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ARCHS = arm64;
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CLANG_ENABLE_MODULES = YES;
+				CODE_SIGN_IDENTITY = "-";
+				CURRENT_PROJECT_VERSION = 1;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = AmbientSyncTests/Info.plist;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+					"@loader_path/../Frameworks",
+				);
+				MACOSX_DEPLOYMENT_TARGET = 26.0;
+				PRODUCT_BUNDLE_IDENTIFIER = cloud.piatkowski.AmbientSyncTests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SUPPORTED_PLATFORMS = macosx;
+				SWIFT_VERSION = 6.0;
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/AmbientSync.app/Contents/MacOS/AmbientSync";
+			};
+			name = Release;
+		};
+
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		A10000000000000000000700 /* Build configuration list for PBXProject "AmbientSync" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				A10000000000000000000801 /* Debug */,
+				A10000000000000000000802 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		A10000000000000000000701 /* Build configuration list for PBXNativeTarget "AmbientSync" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				A10000000000000000000811 /* Debug */,
+				A10000000000000000000812 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		A10000000000000000000702 /* Build configuration list for PBXNativeTarget "AmbientSyncTests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				A10000000000000000000821 /* Debug */,
+				A10000000000000000000822 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+
+/* End XCConfigurationList section */
+	};
+	rootObject = A10000000000000000000001 /* Project object */;
+}

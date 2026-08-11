@@ -3,3 +3,19 @@
 
 # Local OpenCode project state
 .opencode/
+
+# Generated CodeGraph index
+.codegraph/
+
+# Xcode build products and user state
+DerivedData/
+**/DerivedData/
+xcuserdata/
+**/xcuserdata/
+*.xcuserstate
+
+# Machine-local signing configuration
+Local.xcconfig
+*.local.xcconfig
+Signing.xcconfig
+*.signing.xcconfig
