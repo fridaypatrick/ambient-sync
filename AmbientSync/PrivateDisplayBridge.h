@@ -52,6 +52,17 @@ bool ASDDCServiceReadVCP(
     uint16_t *maximumValue
 );
 
+/// Validates and parses one fixed-size DDC Get VCP reply. This checks the
+/// protocol fields that identify a successful reply for `requestedFeature`;
+/// it does not prove physical display or DDC/CI hardware compatibility.
+bool ASDDCParseVCPReply(
+    const uint8_t *reply,
+    size_t replyLength,
+    uint8_t requestedFeature,
+    uint16_t *currentValue,
+    uint16_t *maximumValue
+);
+
 bool ASDDCServiceWriteVCP(
     ASDDCServiceToken token,
     uint8_t feature,

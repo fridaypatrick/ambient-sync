@@ -50,6 +50,18 @@ extern int DisplayServicesGetBrightness(
 enum {
     AS_ARM64_DDC_7BIT_ADDRESS = 0x37,
     AS_ARM64_DDC_DATA_ADDRESS = 0x51,
+    AS_DDC_VCP_REPLY_LENGTH = 11,
+    AS_DDC_VCP_REPLY_SOURCE_ADDRESS = 0x6E,
+    AS_DDC_VCP_REPLY_PAYLOAD_LENGTH = 0x88,
+    AS_DDC_VCP_REPLY_OPCODE_INDEX = 2,
+    AS_DDC_VCP_REPLY_RESULT_INDEX = 3,
+    AS_DDC_VCP_REPLY_FEATURE_INDEX = 4,
+    AS_DDC_VCP_REPLY_TYPE_INDEX = 5,
+    AS_DDC_VCP_REPLY_CONTINUOUS_TYPE = 0x00,
+    AS_DDC_VCP_REPLY_MAXIMUM_HIGH_INDEX = 6,
+    AS_DDC_VCP_REPLY_MAXIMUM_LOW_INDEX = 7,
+    AS_DDC_VCP_REPLY_CURRENT_HIGH_INDEX = 8,
+    AS_DDC_VCP_REPLY_CURRENT_LOW_INDEX = 9,
     AS_DDC_WRITE_CYCLES = 2,
     AS_DDC_ATTEMPTS = 4,
     AS_DDC_WRITE_DELAY_US = 10000,
@@ -563,6 +575,41 @@ int ASDisplayServicesGetBrightness(CGDirectDisplayID display, float *brightness)
     return 0;
 }
 
+bool ASDDCParseVCPReply(
+    const uint8_t *reply,
+    size_t replyLength,
+    uint8_t requestedFeature,
+    uint16_t *currentValue,
+    uint16_t *maximumValue
+) {
+    if (reply == NULL || replyLength != AS_DDC_VCP_REPLY_LENGTH ||
+        currentValue == NULL || maximumValue == NULL ||
+        reply[0] != AS_DDC_VCP_REPLY_SOURCE_ADDRESS ||
+        reply[1] != AS_DDC_VCP_REPLY_PAYLOAD_LENGTH ||
+        reply[AS_DDC_VCP_REPLY_OPCODE_INDEX] != 0x02 ||
+        reply[AS_DDC_VCP_REPLY_RESULT_INDEX] != 0x00 ||
+        reply[AS_DDC_VCP_REPLY_FEATURE_INDEX] != requestedFeature ||
+        reply[AS_DDC_VCP_REPLY_TYPE_INDEX] != AS_DDC_VCP_REPLY_CONTINUOUS_TYPE) {
+        return false;
+    }
+
+    uint16_t maximum = (uint16_t)(
+        ((uint16_t)reply[AS_DDC_VCP_REPLY_MAXIMUM_HIGH_INDEX] << 8) |
+        reply[AS_DDC_VCP_REPLY_MAXIMUM_LOW_INDEX]
+    );
+    uint16_t current = (uint16_t)(
+        ((uint16_t)reply[AS_DDC_VCP_REPLY_CURRENT_HIGH_INDEX] << 8) |
+        reply[AS_DDC_VCP_REPLY_CURRENT_LOW_INDEX]
+    );
+    if (maximum == 0 || current > maximum) {
+        return false;
+    }
+
+    *maximumValue = maximum;
+    *currentValue = current;
+    return true;
+}
+
 size_t ASDDCServiceCreateForDisplays(
     const CGDirectDisplayID *displayIDs,
     size_t displayCount,
@@ -662,14 +709,18 @@ bool ASDDCServiceReadVCP(
     }
 
     uint8_t send[1] = {feature};
-    uint8_t reply[11] = {0};
+    uint8_t reply[AS_DDC_VCP_REPLY_LENGTH] = {0};
     if (!performDDCCommunication(handle->service, send, sizeof(send), reply, sizeof(reply))) {
         return false;
     }
 
-    *maximumValue = (uint16_t)(((uint16_t)reply[6] << 8) | reply[7]);
-    *currentValue = (uint16_t)(((uint16_t)reply[8] << 8) | reply[9]);
-    return *maximumValue > 0 && *currentValue <= *maximumValue;
+    return ASDDCParseVCPReply(
+        reply,
+        sizeof(reply),
+        feature,
+        currentValue,
+        maximumValue
+    );
 }
 
 bool ASDDCServiceWriteVCP(

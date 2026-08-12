@@ -37,6 +37,60 @@ final class DisplayRuntimeTests: XCTestCase {
         XCTAssertEqual(ddcRawVCPValue(forPercent: 1, maximum: 254), 3)
     }
 
+    func testDDCReplyParserAcceptsValidGetVCPReply() {
+        let feature: UInt8 = 0x10
+        let reply = makeVCPReply(
+            feature: feature,
+            maximum: 254,
+            current: 127
+        )
+        var current: UInt16 = 0
+        var maximum: UInt16 = 0
+        let accepted = reply.withUnsafeBufferPointer { buffer in
+            ASDDCParseVCPReply(
+                buffer.baseAddress,
+                buffer.count,
+                feature,
+                &current,
+                &maximum
+            )
+        }
+
+        XCTAssertTrue(accepted)
+        XCTAssertEqual(current, 127)
+        XCTAssertEqual(maximum, 254)
+    }
+
+    func testDDCReplyParserRejectsInvalidGetVCPReplies() {
+        let feature: UInt8 = 0x10
+        let invalidReplies: [[UInt8]] = [
+            makeVCPReply(feature: feature, maximum: 254, current: 127, sourceAddress: 0x03),
+            makeVCPReply(feature: feature, maximum: 254, current: 127, payloadLength: 0x07),
+            makeVCPReply(feature: feature, maximum: 254, current: 127, opcode: 0x01),
+            makeVCPReply(feature: feature, maximum: 254, current: 127, result: 0x01),
+            makeVCPReply(feature: 0x12, maximum: 254, current: 127),
+            makeVCPReply(feature: feature, maximum: 254, current: 127, responseType: 0x01),
+            makeVCPReply(feature: feature, maximum: 0, current: 0),
+            makeVCPReply(feature: feature, maximum: 100, current: 101),
+            Array(makeVCPReply(feature: feature, maximum: 254, current: 127).dropLast())
+        ]
+
+        for reply in invalidReplies {
+            var current: UInt16 = 0
+            var maximum: UInt16 = 0
+            let accepted = reply.withUnsafeBufferPointer { buffer in
+                ASDDCParseVCPReply(
+                    buffer.baseAddress,
+                    buffer.count,
+                    feature,
+                    &current,
+                    &maximum
+                )
+            }
+            XCTAssertFalse(accepted, "Unexpectedly accepted reply: \(reply)")
+        }
+    }
+
     func testNoBuiltInDisplayPausesWithoutWritingExternalBrightness() async {
         let external = makeDisplay(id: 2, builtIn: false)
         let sink = RecordingSink()
@@ -320,6 +374,86 @@ final class DisplayRuntimeTests: XCTestCase {
         let rebuildCountAfterNotification = await provider.rebuildCount()
         XCTAssertEqual(rebuildCountAfterNotification, rebuildsAfterStop)
     }
+
+    func testStopInvalidatesInFlightRefreshAndSuppressesStalePublication() async {
+        let builtIn = makeDisplay(id: 1, builtIn: true)
+        let external = makeDisplay(id: 2, builtIn: false)
+        let gate = RefreshGate()
+        let provider = BlockingTransportProvider(
+            bindings: [ExternalDisplayBinding(record: external, sink: RecordingSink())],
+            gate: gate
+        )
+        let recorder = SnapshotRecorder()
+        let manager = DisplayManager(
+            enumerator: TestDisplayEnumerator(records: [builtIn, external]),
+            externalProvider: provider,
+            lifecycleNotificationCenter: NotificationCenter(),
+            stateUpdateHandler: { snapshot in
+                recorder.append(snapshot)
+            }
+        )
+
+        let startTask = Task {
+            await manager.start()
+        }
+        await gate.waitUntilStarted()
+
+        await manager.stop()
+        await gate.release()
+        await startTask.value
+
+        let finalState = await manager.runtimeState()
+        XCTAssertEqual(finalState.snapshot, .empty)
+        XCTAssertTrue(finalState.externalTargets.isEmpty)
+        XCTAssertEqual(recorder.snapshots(), [])
+        let activeHandleCount = await provider.activeHandleCount()
+        let invalidationCount = await provider.invalidateCount()
+        XCTAssertEqual(activeHandleCount, 0)
+        XCTAssertGreaterThanOrEqual(invalidationCount, 2)
+    }
+
+    func testCallbackRegistryLookupRemovalAndConcurrentAccessAreSafe() async {
+        let external = makeDisplay(id: 2, builtIn: false)
+        let provider = TestTransportProvider(
+            bindings: [ExternalDisplayBinding(record: external, sink: RecordingSink())]
+        )
+        let manager = DisplayManager(
+            enumerator: TestDisplayEnumerator(records: [external]),
+            externalProvider: provider,
+            lifecycleNotificationCenter: NotificationCenter()
+        )
+        await manager.start()
+        let registry = DisplayReconfigurationCallbackRegistry()
+        let token = registry.register(manager)
+        XCTAssertTrue(registry.manager(for: token) === manager)
+
+        let lookupStarted = DispatchSemaphore(value: 0)
+        let lookupFinished = DispatchSemaphore(value: 0)
+        let removalFinished = DispatchSemaphore(value: 0)
+        let lookupResults = CallbackLookupResults()
+        DispatchQueue.global().async {
+            lookupStarted.signal()
+            for _ in 0..<1_000 {
+                lookupResults.recordFound(registry.manager(for: token) != nil)
+            }
+            lookupFinished.signal()
+        }
+        DispatchQueue.global().async {
+            lookupStarted.wait()
+            registry.remove(token)
+            removalFinished.signal()
+        }
+
+        XCTAssertEqual(removalFinished.wait(timeout: .now() + 1), .success)
+        XCTAssertEqual(lookupFinished.wait(timeout: .now() + 1), .success)
+        XCTAssertNil(registry.manager(for: token))
+        XCTAssertGreaterThanOrEqual(lookupResults.foundCount(), 0)
+        XCTAssertLessThanOrEqual(lookupResults.foundCount(), 1_000)
+
+        let invalidationCount = await provider.invalidateCount()
+        XCTAssertEqual(invalidationCount, 0)
+        await manager.stop()
+    }
 }
 
 private struct SettingsResult {
@@ -356,6 +490,31 @@ private func makeDisplay(id: UInt32, builtIn: Bool) -> DisplayRecord {
     )
 }
 
+private func makeVCPReply(
+    feature: UInt8,
+    maximum: UInt16,
+    current: UInt16,
+    sourceAddress: UInt8 = 0x6E,
+    payloadLength: UInt8 = 0x88,
+    opcode: UInt8 = 0x02,
+    result: UInt8 = 0x00,
+    responseType: UInt8 = 0x00
+) -> [UInt8] {
+    [
+        sourceAddress,
+        payloadLength,
+        opcode,
+        result,
+        feature,
+        responseType,
+        UInt8(maximum >> 8),
+        UInt8(maximum & 0xFF),
+        UInt8(current >> 8),
+        UInt8(current & 0xFF),
+        0x00
+    ]
+}
+
 private func makeManager(
     records: [DisplayRecord],
     bindings: [ExternalDisplayBinding]
@@ -385,6 +544,7 @@ private actor TestTransportProvider: ExternalDisplayTransportProvider {
     private var bindings: [ExternalDisplayBinding]
     private var rebuilds = 0
     private var invalidations = 0
+    private var activeHandles = 0
 
     init(bindings: [ExternalDisplayBinding]) {
         self.bindings = bindings
@@ -393,11 +553,14 @@ private actor TestTransportProvider: ExternalDisplayTransportProvider {
     func rebuild(for displays: [DisplayRecord]) async -> [ExternalDisplayBinding] {
         rebuilds += 1
         let displayIDs = Set(displays.map(\.displayID))
-        return bindings.filter { displayIDs.contains($0.record.displayID) }
+        let matchingBindings = bindings.filter { displayIDs.contains($0.record.displayID) }
+        activeHandles = matchingBindings.count
+        return matchingBindings
     }
 
     func invalidate() async {
         invalidations += 1
+        activeHandles = 0
     }
 
     func setBindings(_ bindings: [ExternalDisplayBinding]) {
@@ -410,6 +573,114 @@ private actor TestTransportProvider: ExternalDisplayTransportProvider {
 
     func invalidateCount() -> Int {
         invalidations
+    }
+
+    func activeHandleCount() -> Int {
+        activeHandles
+    }
+}
+
+private actor RefreshGate {
+    private var started = false
+    private var released = false
+    private var startWaiters: [CheckedContinuation<Void, Never>] = []
+    private var releaseContinuation: CheckedContinuation<Void, Never>?
+
+    func waitUntilStarted() async {
+        guard !started else { return }
+        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+            startWaiters.append(continuation)
+        }
+    }
+
+    func waitUntilReleased() async {
+        started = true
+        let waiters = startWaiters
+        startWaiters.removeAll()
+        for waiter in waiters {
+            waiter.resume()
+        }
+
+        guard !released else { return }
+        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+            releaseContinuation = continuation
+        }
+    }
+
+    func release() {
+        released = true
+        releaseContinuation?.resume()
+        releaseContinuation = nil
+    }
+}
+
+private actor BlockingTransportProvider: ExternalDisplayTransportProvider {
+    private let bindings: [ExternalDisplayBinding]
+    private let gate: RefreshGate
+    private var activeHandles = 0
+    private var invalidations = 0
+
+    init(bindings: [ExternalDisplayBinding], gate: RefreshGate) {
+        self.bindings = bindings
+        self.gate = gate
+    }
+
+    func rebuild(for displays: [DisplayRecord]) async -> [ExternalDisplayBinding] {
+        await gate.waitUntilReleased()
+        let displayIDs = Set(displays.map(\.displayID))
+        let matchingBindings = bindings.filter { displayIDs.contains($0.record.displayID) }
+        activeHandles = matchingBindings.count
+        return matchingBindings
+    }
+
+    func invalidate() async {
+        activeHandles = 0
+        invalidations += 1
+    }
+
+    func activeHandleCount() -> Int {
+        activeHandles
+    }
+
+    func invalidateCount() -> Int {
+        invalidations
+    }
+}
+
+/// Lock-backed test recorder; the lock protects synchronous callback writes
+/// from the actor-isolated manager without widening production sendability.
+private final class SnapshotRecorder: @unchecked Sendable {
+    private let lock = NSLock()
+    private var recordedSnapshots: [DisplaySnapshot] = []
+
+    func append(_ snapshot: DisplaySnapshot) {
+        lock.lock()
+        recordedSnapshots.append(snapshot)
+        lock.unlock()
+    }
+
+    func snapshots() -> [DisplaySnapshot] {
+        lock.lock()
+        defer { lock.unlock() }
+        return recordedSnapshots
+    }
+}
+
+private final class CallbackLookupResults: @unchecked Sendable {
+    private let lock = NSLock()
+    private var lookupsWithManager = 0
+
+    func recordFound(_ found: Bool) {
+        guard found else { return }
+        lock.lock()
+        lookupsWithManager += 1
+        lock.unlock()
+    }
+
+    func foundCount() -> Int {
+        lock.lock()
+        defer { lock.unlock() }
+        return lookupsWithManager
     }
 }
 

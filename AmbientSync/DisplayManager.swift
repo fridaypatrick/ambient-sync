@@ -20,6 +20,7 @@ public actor DisplayManager: DisplayRuntimeProviding {
     private let debounceInterval: Duration
 
     private var running = false
+    private var lifecycleGeneration: UInt64 = 0
     private var snapshot = DisplaySnapshot.empty
     private var externalTargets: [ExternalDisplayTarget] = []
     private var refreshTask: Task<Void, Never>?
@@ -43,6 +44,7 @@ public actor DisplayManager: DisplayRuntimeProviding {
     public func start() async {
         guard !running else { return }
         running = true
+        lifecycleGeneration &+= 1
         installLifecycleObservers()
         registration = DisplayReconfigurationRegistration(manager: self)
         await refreshNow()
@@ -51,13 +53,14 @@ public actor DisplayManager: DisplayRuntimeProviding {
     public func stop() async {
         guard running || registration != nil || !observerStore.isEmpty else { return }
         running = false
+        lifecycleGeneration &+= 1
         refreshTask?.cancel()
         refreshTask = nil
         registration?.stop()
         registration = nil
         observerStore.removeAll()
-        await externalProvider.invalidate()
         externalTargets.removeAll()
+        await externalProvider.invalidate()
     }
 
     public func shutdown() async {
@@ -65,9 +68,11 @@ public actor DisplayManager: DisplayRuntimeProviding {
     }
 
     public func refreshNow() async {
+        guard running else { return }
         refreshTask?.cancel()
         refreshTask = nil
-        await performRefresh()
+        let generation = lifecycleGeneration
+        await performRefresh(for: generation)
     }
 
     /// Schedules debounced work. This is the only operation reached from the
@@ -119,10 +124,20 @@ public actor DisplayManager: DisplayRuntimeProviding {
         DisplayRuntimeState(snapshot: snapshot, externalTargets: externalTargets)
     }
 
-    private func performRefresh() async {
+    private func performRefresh(for generation: UInt64) async {
         let records = await enumerator.enumerate()
+        guard running, lifecycleGeneration == generation else { return }
+
         let externalRecords = records.filter { !$0.isBuiltIn }
         let bindings = await externalProvider.rebuild(for: externalRecords)
+        guard running, lifecycleGeneration == generation else {
+            // A provider can finish rebuilding after stop invalidated its
+            // previous handles. Invalidate again so handles created by this
+            // stale rebuild cannot survive the shutdown boundary.
+            await externalProvider.invalidate()
+            return
+        }
+
         let bindingsByDisplayID = Dictionary(
             bindings.map { ($0.record.displayID, $0) },
             uniquingKeysWith: { first, _ in first }
@@ -182,7 +197,8 @@ public actor DisplayManager: DisplayRuntimeProviding {
 
     deinit {
         refreshTask?.cancel()
-        registration?.stop()
+        // Stored registration deinitialization deactivates and unregisters
+        // its retained callback context before releasing its unmanaged hold.
     }
 }
 
@@ -223,34 +239,91 @@ private final class LifecycleObserverStore: @unchecked Sendable {
     }
 }
 
-/// Registration owns only an opaque, unretained actor pointer. Locking makes
-/// explicit that shutdown and deinitialization cannot unregister twice.
-private final class DisplayReconfigurationRegistration: @unchecked Sendable {
-    private let userInfo: UnsafeMutableRawPointer
+/// The registry is the only unchecked Sendable boundary in callback lifetime
+/// management. Its lock protects token allocation, weak manager storage, and
+/// strong manager lookup; callbacks never dereference token pointers.
+final class DisplayReconfigurationCallbackRegistry: @unchecked Sendable {
+    static let shared = DisplayReconfigurationCallbackRegistry()
+
+    private final class WeakManagerReference {
+        weak var manager: DisplayManager?
+
+        init(manager: DisplayManager) {
+            self.manager = manager
+        }
+    }
+
+    private let lock = NSLock()
+    private var nextToken: UInt = 1
+    private var managers: [UInt: WeakManagerReference] = [:]
+
+    func register(_ manager: DisplayManager) -> UInt {
+        lock.lock()
+        defer { lock.unlock() }
+
+        while true {
+            let token = nextToken
+            nextToken &+= 1
+            guard token != 0, managers[token] == nil else { continue }
+            managers[token] = WeakManagerReference(manager: manager)
+            return token
+        }
+    }
+
+    func manager(for token: UInt) -> DisplayManager? {
+        lock.lock()
+        defer { lock.unlock() }
+
+        guard let reference = managers[token] else { return nil }
+        guard let manager = reference.manager else {
+            managers.removeValue(forKey: token)
+            return nil
+        }
+        return manager
+    }
+
+    func remove(_ token: UInt) {
+        lock.lock()
+        managers.removeValue(forKey: token)
+        lock.unlock()
+    }
+}
+
+/// Registration retains callback context independently from the actor. The
+/// context weakly references the actor, so registration cannot form a cycle.
+private final class DisplayReconfigurationRegistration {
+    private let token: UInt
     private let lock = NSLock()
     private var registered = false
 
     init(manager: DisplayManager) {
-        userInfo = Unmanaged.passUnretained(manager).toOpaque()
-        registered = CGDisplayRegisterReconfigurationCallback(
+        let token = DisplayReconfigurationCallbackRegistry.shared.register(manager)
+        self.token = token
+        let userInfo = UnsafeMutableRawPointer(bitPattern: token)!
+        let result = CGDisplayRegisterReconfigurationCallback(
             ambientSyncDisplayReconfigurationCallback,
             userInfo
-        ) == .success
+        )
+        if result == .success {
+            registered = true
+        } else {
+            DisplayReconfigurationCallbackRegistry.shared.remove(token)
+        }
     }
 
     func stop() {
         lock.lock()
-        guard registered else {
-            lock.unlock()
-            return
-        }
+        let shouldRemove = registered
         registered = false
         lock.unlock()
 
-        _ = CGDisplayRemoveReconfigurationCallback(
-            ambientSyncDisplayReconfigurationCallback,
-            userInfo
-        )
+        if shouldRemove {
+            _ = CGDisplayRemoveReconfigurationCallback(
+                ambientSyncDisplayReconfigurationCallback,
+                UnsafeMutableRawPointer(bitPattern: token)!
+            )
+        }
+        DisplayReconfigurationCallbackRegistry.shared.remove(token)
     }
 
     deinit {
@@ -266,7 +339,9 @@ private func ambientSyncDisplayReconfigurationCallback(
     _ = displayID
     _ = flags
     guard let userInfo else { return }
-    let manager = Unmanaged<DisplayManager>.fromOpaque(userInfo).takeUnretainedValue()
+    let token = UInt(bitPattern: userInfo)
+    let manager = DisplayReconfigurationCallbackRegistry.shared.manager(for: token)
+    guard let manager else { return }
     Task {
         await manager.displayConfigurationDidChange()
     }
