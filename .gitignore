@@ -13,6 +13,7 @@ DerivedData/
 xcuserdata/
 **/xcuserdata/
 *.xcuserstate
+.build/
 
 # Machine-local signing configuration
 Local.xcconfig
