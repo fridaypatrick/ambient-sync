@@ -29,7 +29,7 @@ public enum AppearanceDecision: Equatable, Sendable {
 /// emitted merely because a threshold is crossed. The caller must call
 /// `markSwitchCompleted` only after the external appearance switch succeeds.
 public struct AppearanceHysteresisController {
-    public let thresholds: AppearanceThresholds
+    public private(set) var thresholds: AppearanceThresholds
     public let minimumDwell: TimeInterval
 
     private let clock: any AmbientClock
@@ -97,6 +97,16 @@ public struct AppearanceHysteresisController {
     }
 
     public mutating func markRequestFailed() {
+        pendingRequest = nil
+    }
+
+    /// Applies a threshold edit without performing an appearance request.
+    /// Pending work is discarded because it was decided using old settings.
+    public mutating func updateThresholds(_ thresholds: AppearanceThresholds) {
+        self.thresholds = AppearanceThresholds.normalized(
+            dark: thresholds.dark,
+            light: thresholds.light
+        )
         pendingRequest = nil
     }
 }

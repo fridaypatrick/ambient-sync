@@ -439,6 +439,46 @@ static int matchScore(CGDirectDisplayID displayID, const ASServiceInfo *service)
     return score;
 }
 
+bool ASDisplayCopyProductName(
+    CGDirectDisplayID display,
+    char *buffer,
+    size_t capacity
+) {
+    if (buffer == NULL || capacity == 0 || CoreDisplay_DisplayCreateInfoDictionary == NULL) {
+        return false;
+    }
+
+    buffer[0] = '\0';
+    CFDictionaryRef dictionary = CoreDisplay_DisplayCreateInfoDictionary(display);
+    if (dictionary == NULL) {
+        return false;
+    }
+
+    CFTypeRef nameList = CFDictionaryGetValue(dictionary, CFSTR("DisplayProductName"));
+    if (nameList != NULL && CFGetTypeID(nameList) == CFDictionaryGetTypeID()) {
+        CFTypeRef localizedName = CFDictionaryGetValue(
+            (CFDictionaryRef)nameList,
+            CFSTR("en_US")
+        );
+        copyCFString(localizedName, buffer, capacity);
+        if (buffer[0] == '\0') {
+            FirstDictionaryStringContext context = {
+                .destination = buffer,
+                .capacity = capacity,
+                .copied = false
+            };
+            CFDictionaryApplyFunction(
+                (CFDictionaryRef)nameList,
+                copyFirstDictionaryString,
+                &context
+            );
+        }
+    }
+
+    CFRelease(dictionary);
+    return buffer[0] != '\0';
+}
+
 static uint8_t ddcChecksum(uint8_t seed, const uint8_t *data, size_t length) {
     uint8_t checksum = seed;
     for (size_t index = 0; index < length; index += 1) {

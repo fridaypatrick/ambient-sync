@@ -22,6 +22,8 @@
 	<string>26.0</string>
 	<key>LSUIElement</key>
 	<true/>
+	<key>NSAppleEventsUsageDescription</key>
+	<string>AmbientSync sends Apple Events to System Events to switch system appearance.</string>
 	<key>NSHighResolutionCapable</key>
 	<true/>
 </dict>

@@ -85,6 +85,32 @@ final class LogicTests: XCTestCase {
         XCTAssertTrue(first.settingsKey.hasPrefix("display.edid-"))
     }
 
+    func testLocalizedDisplayProductLabelDoesNotChangePersistedIdentity() {
+        let descriptor = DisplayDescriptor(
+            serialNumber: "SN-42",
+            vendorID: 0x1234,
+            productID: 0x5678
+        )
+        let englishRecord = DisplayRecord(
+            displayID: 99,
+            name: "Studio Display",
+            descriptor: descriptor,
+            isBuiltIn: false
+        )
+        let localizedRecord = DisplayRecord(
+            displayID: 99,
+            name: "Écran du studio",
+            descriptor: descriptor,
+            isBuiltIn: false
+        )
+
+        // Localized labels feed DisplayRecord.name only. The descriptor used
+        // by persistence contains stable vendor/model/serial metadata.
+        XCTAssertNotEqual(englishRecord.name, localizedRecord.name)
+        XCTAssertEqual(englishRecord.identity, localizedRecord.identity)
+        XCTAssertEqual(englishRecord.identity.settingsKey, localizedRecord.identity.settingsKey)
+    }
+
     func testLinearMappingUsesTenToEightyRange() {
         let range = DisplayBrightnessRange(minimum: 0.10, maximum: 0.80)
 
@@ -108,6 +134,13 @@ final class LogicTests: XCTestCase {
         let narrow = AppearanceThresholds.normalized(dark: 0.30, light: 0.32)
         XCTAssertEqual(narrow.dark, 0.30, accuracy: 0.000_001)
         XCTAssertEqual(narrow.light, 0.35, accuracy: 0.000_001)
+    }
+
+    func testDisplayRangeNormalizationMaintainsOrderedPercentageBounds() {
+        let normalized = DisplayBrightnessRange(minimum: 0.90, maximum: 0.10)
+
+        XCTAssertEqual(normalized.minimum, 0.10, accuracy: 0.000_001)
+        XCTAssertEqual(normalized.maximum, 0.90, accuracy: 0.000_001)
     }
 
     func testMeaningfulBrightnessChangeRequiresTwoPercent() {

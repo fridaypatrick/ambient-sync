@@ -25,9 +25,15 @@
 		A10000000000000000000035 /* AppleSiliconDDC.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000135 /* AppleSiliconDDC.swift */; };
 		A10000000000000000000036 /* DisplayManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000136 /* DisplayManager.swift */; };
 		A10000000000000000000037 /* BrightnessSyncController.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000137 /* BrightnessSyncController.swift */; };
+		A10000000000000000000038 /* AppearanceAutomation.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1000000000000000000013A /* AppearanceAutomation.swift */; };
+		A10000000000000000000039 /* LoginItemManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1000000000000000000013B /* LoginItemManager.swift */; };
+		A1000000000000000000003A /* MenuBarController.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1000000000000000000013C /* MenuBarController.swift */; };
+		A1000000000000000000003B /* SettingsWindowController.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1000000000000000000013D /* SettingsWindowController.swift */; };
+		A1000000000000000000003C /* AmbientSyncCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1000000000000000000013E /* AmbientSyncCoordinator.swift */; };
 		A10000000000000000000021 /* LogicTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000121 /* LogicTests.swift */; };
 		A10000000000000000000022 /* XCTest.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = A10000000000000000000203 /* XCTest.framework */; };
 		A10000000000000000000023 /* DisplayRuntimeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000123 /* DisplayRuntimeTests.swift */; };
+		A10000000000000000000024 /* IntegrationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000124 /* IntegrationTests.swift */; };
 
 /* End PBXBuildFile section */
 
@@ -49,9 +55,15 @@
 		A10000000000000000000137 /* BrightnessSyncController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BrightnessSyncController.swift; sourceTree = "<group>"; };
 		A10000000000000000000138 /* AmbientSync-Bridging-Header.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = AmbientSync-Bridging-Header.h; sourceTree = "<group>"; };
 		A10000000000000000000139 /* PrivateDisplayBridge.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = PrivateDisplayBridge.h; sourceTree = "<group>"; };
+		A1000000000000000000013A /* AppearanceAutomation.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppearanceAutomation.swift; sourceTree = "<group>"; };
+		A1000000000000000000013B /* LoginItemManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LoginItemManager.swift; sourceTree = "<group>"; };
+		A1000000000000000000013C /* MenuBarController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MenuBarController.swift; sourceTree = "<group>"; };
+		A1000000000000000000013D /* SettingsWindowController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsWindowController.swift; sourceTree = "<group>"; };
+		A1000000000000000000013E /* AmbientSyncCoordinator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AmbientSyncCoordinator.swift; sourceTree = "<group>"; };
 		A10000000000000000000121 /* LogicTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LogicTests.swift; sourceTree = "<group>"; };
 		A10000000000000000000122 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 		A10000000000000000000123 /* DisplayRuntimeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DisplayRuntimeTests.swift; sourceTree = "<group>"; };
+		A10000000000000000000124 /* IntegrationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IntegrationTests.swift; sourceTree = "<group>"; };
 		A10000000000000000000201 /* AppKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = AppKit.framework; path = System/Library/Frameworks/AppKit.framework; sourceTree = SDKROOT; };
 		A10000000000000000000202 /* Foundation.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Foundation.framework; path = System/Library/Frameworks/Foundation.framework; sourceTree = SDKROOT; };
 		A10000000000000000000203 /* XCTest.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = XCTest.framework; path = System/Library/Frameworks/XCTest.framework; sourceTree = SDKROOT; };
@@ -113,6 +125,11 @@
 				A10000000000000000000135 /* AppleSiliconDDC.swift */,
 				A10000000000000000000136 /* DisplayManager.swift */,
 				A10000000000000000000137 /* BrightnessSyncController.swift */,
+				A1000000000000000000013A /* AppearanceAutomation.swift */,
+				A1000000000000000000013B /* LoginItemManager.swift */,
+				A1000000000000000000013C /* MenuBarController.swift */,
+				A1000000000000000000013D /* SettingsWindowController.swift */,
+				A1000000000000000000013E /* AmbientSyncCoordinator.swift */,
 				A10000000000000000000138 /* AmbientSync-Bridging-Header.h */,
 				A10000000000000000000139 /* PrivateDisplayBridge.h */,
 				A10000000000000000000116 /* Info.plist */,
@@ -125,6 +142,7 @@
 			children = (
 				A10000000000000000000121 /* LogicTests.swift */,
 				A10000000000000000000123 /* DisplayRuntimeTests.swift */,
+				A10000000000000000000124 /* IntegrationTests.swift */,
 				A10000000000000000000122 /* Info.plist */,
 			);
 			path = AmbientSyncTests;
@@ -266,6 +284,11 @@
 				A10000000000000000000035 /* AppleSiliconDDC.swift in Sources */,
 				A10000000000000000000036 /* DisplayManager.swift in Sources */,
 				A10000000000000000000037 /* BrightnessSyncController.swift in Sources */,
+				A10000000000000000000038 /* AppearanceAutomation.swift in Sources */,
+				A10000000000000000000039 /* LoginItemManager.swift in Sources */,
+				A1000000000000000000003A /* MenuBarController.swift in Sources */,
+				A1000000000000000000003B /* SettingsWindowController.swift in Sources */,
+				A1000000000000000000003C /* AmbientSyncCoordinator.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -275,6 +298,7 @@
 			files = (
 				A10000000000000000000021 /* LogicTests.swift in Sources */,
 				A10000000000000000000023 /* DisplayRuntimeTests.swift in Sources */,
+				A10000000000000000000024 /* IntegrationTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

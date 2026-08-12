@@ -26,6 +26,14 @@ typedef uint64_t ASDDCServiceToken;
 /// unavailable or returns an invalid brightness value.
 int ASDisplayServicesGetBrightness(CGDirectDisplayID display, float *brightness);
 
+/// Copies a localized product name from existing CoreDisplay metadata.
+/// Returns false when metadata is unavailable.
+bool ASDisplayCopyProductName(
+    CGDirectDisplayID display,
+    char *buffer,
+    size_t capacity
+);
+
 /// Matches external CoreGraphics displays to external IOAVService handles.
 /// `tokens` is indexed like `displayIDs`; zero means no usable match.
 size_t ASDDCServiceCreateForDisplays(

@@ -36,13 +36,18 @@ public actor CoreGraphicsDisplayEnumerator: DisplayEnumerator {
             guard displayID != 0 else { return nil }
 
             let isBuiltIn = CGDisplayIsBuiltin(displayID) != 0
+            let productName = productName(for: displayID)
             let descriptor = DisplayDescriptor(
+                // CoreDisplay's localized label is presentation data. Keep it
+                // out of persistence identity; vendor/model/serial metadata
+                // remains the stable descriptor input.
+                product: nil,
                 serialNumber: serialNumber(for: displayID),
                 vendorID: nonZero(CGDisplayVendorNumber(displayID)),
                 productID: nonZero(CGDisplayModelNumber(displayID)),
                 displayID: displayID
             )
-            let name = isBuiltIn ? "Built-in display" : "External display"
+            let name = isBuiltIn ? "Built-in display" : (productName ?? fallbackName(for: descriptor))
             return DisplayRecord(
                 displayID: displayID,
                 name: name,
@@ -59,6 +64,28 @@ public actor CoreGraphicsDisplayEnumerator: DisplayEnumerator {
     private func serialNumber(for displayID: CGDirectDisplayID) -> String? {
         let serial = CGDisplaySerialNumber(displayID)
         return serial == 0 ? nil : String(serial)
+    }
+
+    private func productName(for displayID: CGDirectDisplayID) -> String? {
+        var buffer = [CChar](repeating: 0, count: 256)
+        let copied = buffer.withUnsafeMutableBufferPointer { buffer in
+            ASDisplayCopyProductName(displayID, buffer.baseAddress, buffer.count)
+        }
+        guard copied else { return nil }
+
+        let bytes = buffer.prefix { $0 != 0 }.map { UInt8(bitPattern: $0) }
+        let name = String(bytes: bytes, encoding: .utf8)?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        return name?.isEmpty == false ? name : nil
+    }
+
+    private func fallbackName(for descriptor: DisplayDescriptor) -> String {
+        let vendor = descriptor.vendorID.map { String(format: "%04X", $0) }
+        let product = descriptor.productID.map { String(format: "%04X", $0) }
+        if let vendor, let product {
+            return "External display (\(vendor):\(product))"
+        }
+        return "External display"
     }
 
 }
