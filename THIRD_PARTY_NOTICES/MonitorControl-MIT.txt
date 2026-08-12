@@ -1,14 +1,35 @@
 MonitorControl
 ==============
 
-AmbientSync reserves this separated notice for future files adapted from
-MonitorControl. No MonitorControl implementation code is included in Phase 1.
+AmbientSync includes minimal display-runtime code adapted from MonitorControl.
+Adapted files in Phase 2:
+
+- AmbientSync/AmbientSync-Bridging-Header.h
+- AmbientSync/PrivateDisplayBridge.h
+- AmbientSync/PrivateDisplayBridge.c
+- AmbientSync/BuiltInBrightnessSource.swift
+- AmbientSync/AppleSiliconDDC.swift
+- AmbientSync/CoreGraphicsDisplayEnumerator.swift
+- AmbientSync/DisplayManager.swift
+
+The exact upstream source revision inspected and used is:
+
+    f16d90f29cefbd9fff47e26fc8f99fe7a5280deb
+
+Upstream files reviewed:
+
+- MonitorControl/Support/DisplayManager.swift
+- MonitorControl/Model/Display.swift
+- MonitorControl/Model/AppleDisplay.swift
+- MonitorControl/Support/Arm64DDC.swift
+- MonitorControl/Model/OtherDisplay.swift
+- MonitorControl/Support/Bridging-Header.h
 
 Source: https://github.com/MonitorControl/MonitorControl
 
 MIT License
 
-Copyright (c) 2019-2024 MonitorControl contributors
+Copyright © MonitorControl. @JoniVR, @theOneyouseek, @waydabber and others
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal

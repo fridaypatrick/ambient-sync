@@ -8,6 +8,9 @@ public struct DisplayDescriptor: Equatable, Hashable, Sendable {
     public let vendorID: UInt32?
     public let productID: UInt32?
     public let displayID: UInt32?
+    /// EDID-derived UUID when CoreGraphics exposes one. This value is used
+    /// for persistence; `displayID` remains runtime-only.
+    public let edidUUID: String?
 
     public init(
         manufacturer: String? = nil,
@@ -15,7 +18,8 @@ public struct DisplayDescriptor: Equatable, Hashable, Sendable {
         serialNumber: String? = nil,
         vendorID: UInt32? = nil,
         productID: UInt32? = nil,
-        displayID: UInt32? = nil
+        displayID: UInt32? = nil,
+        edidUUID: String? = nil
     ) {
         self.manufacturer = manufacturer
         self.product = product
@@ -23,15 +27,18 @@ public struct DisplayDescriptor: Equatable, Hashable, Sendable {
         self.vendorID = vendorID
         self.productID = productID
         self.displayID = displayID
+        self.edidUUID = edidUUID
     }
 }
 
 /// Stable key used by settings persistence.
 ///
-/// EDID manufacturer/product/serial data is preferred. When serial data is
-/// absent, normalized manufacturer/product/vendor/product identifiers are
-/// combined deterministically. The runtime display ID is intentionally not
-/// persisted because it can change across reconfiguration or reconnect.
+/// EDID UUID or manufacturer/product/serial data is preferred. Numeric
+/// vendor/product identifiers with a serial are treated as EDID-equivalent
+/// metadata. When serial data is absent, normalized
+/// manufacturer/product/vendor/product identifiers are combined
+/// deterministically. The runtime display ID is intentionally not persisted
+/// because it can change across reconfiguration or reconnect.
 /// The fallback cannot distinguish two otherwise identical displays that expose
 /// no unique identifier; later enumeration code must provide a better descriptor
 /// when such hardware allows it.
@@ -48,9 +55,21 @@ public struct DisplayIdentity: Codable, Equatable, Hashable, Sendable {
         let manufacturer = Self.nonEmpty(descriptor.manufacturer)
         let product = Self.nonEmpty(descriptor.product)
         let serial = Self.nonEmpty(descriptor.serialNumber)
+        let edidUUID = Self.nonEmpty(descriptor.edidUUID)
+        let manufacturerToken = Self.token(
+            manufacturer ?? descriptor.vendorID.map { "VENDOR-\(Self.hex($0))" }
+        )
+        let productToken = Self.token(
+            product ?? descriptor.productID.map { "MODEL-\(Self.hex($0))" }
+        )
 
-        if let manufacturer, let product, let serial {
-            value = "edid-\(Self.token(manufacturer))-\(Self.token(product))-\(Self.token(serial))"
+        if let edidUUID {
+            value = "edid-uuid-\(Self.token(edidUUID))"
+            basis = .edid
+        } else if let serial,
+                  (manufacturer != nil || descriptor.vendorID != nil),
+                  (product != nil || descriptor.productID != nil) {
+            value = "edid-\(manufacturerToken)-\(productToken)-\(Self.token(serial))"
             basis = .edid
         } else {
             let fallbackParts = [

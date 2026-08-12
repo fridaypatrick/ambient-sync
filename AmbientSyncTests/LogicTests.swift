@@ -62,6 +62,29 @@ final class LogicTests: XCTestCase {
         XCTAssertTrue(first.settingsKey.hasPrefix("display.fallback-"))
     }
 
+    func testNumericEDIDMetadataWithSerialUsesStableEDIDIdentity() {
+        let first = DisplayIdentity(
+            descriptor: DisplayDescriptor(
+                serialNumber: "SN-42",
+                vendorID: 0x1234,
+                productID: 0x5678,
+                displayID: 99
+            )
+        )
+        let second = DisplayIdentity(
+            descriptor: DisplayDescriptor(
+                serialNumber: "SN-42",
+                vendorID: 0x1234,
+                productID: 0x5678,
+                displayID: 100
+            )
+        )
+
+        XCTAssertEqual(first, second)
+        XCTAssertEqual(first.basis, .edid)
+        XCTAssertTrue(first.settingsKey.hasPrefix("display.edid-"))
+    }
+
     func testLinearMappingUsesTenToEightyRange() {
         let range = DisplayBrightnessRange(minimum: 0.10, maximum: 0.80)
 

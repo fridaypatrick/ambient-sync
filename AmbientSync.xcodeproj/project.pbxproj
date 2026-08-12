@@ -14,8 +14,20 @@
 		A10000000000000000000015 /* SettingsStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000115 /* SettingsStore.swift */; };
 		A10000000000000000000016 /* AppKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = A10000000000000000000201 /* AppKit.framework */; };
 		A10000000000000000000017 /* Foundation.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = A10000000000000000000202 /* Foundation.framework */; };
+		A10000000000000000000018 /* CoreGraphics.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = A10000000000000000000204 /* CoreGraphics.framework */; };
+		A10000000000000000000019 /* IOKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = A10000000000000000000205 /* IOKit.framework */; };
+		A1000000000000000000001A /* CoreDisplay.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = A10000000000000000000206 /* CoreDisplay.framework */; settings = {ATTRIBUTES = (Weak, ); }; };
+		A1000000000000000000001B /* DisplayServices.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = A10000000000000000000207 /* DisplayServices.framework */; settings = {ATTRIBUTES = (Weak, ); }; };
+		A10000000000000000000031 /* DisplayRuntime.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000131 /* DisplayRuntime.swift */; };
+		A10000000000000000000032 /* CoreGraphicsDisplayEnumerator.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000132 /* CoreGraphicsDisplayEnumerator.swift */; };
+		A10000000000000000000033 /* BuiltInBrightnessSource.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000133 /* BuiltInBrightnessSource.swift */; };
+		A10000000000000000000034 /* PrivateDisplayBridge.c in Sources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000134 /* PrivateDisplayBridge.c */; };
+		A10000000000000000000035 /* AppleSiliconDDC.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000135 /* AppleSiliconDDC.swift */; };
+		A10000000000000000000036 /* DisplayManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000136 /* DisplayManager.swift */; };
+		A10000000000000000000037 /* BrightnessSyncController.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000137 /* BrightnessSyncController.swift */; };
 		A10000000000000000000021 /* LogicTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000121 /* LogicTests.swift */; };
 		A10000000000000000000022 /* XCTest.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = A10000000000000000000203 /* XCTest.framework */; };
+		A10000000000000000000023 /* DisplayRuntimeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000123 /* DisplayRuntimeTests.swift */; };
 
 /* End PBXBuildFile section */
 
@@ -28,11 +40,25 @@
 		A10000000000000000000114 /* DisplayIdentity.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DisplayIdentity.swift; sourceTree = "<group>"; };
 		A10000000000000000000115 /* SettingsStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsStore.swift; sourceTree = "<group>"; };
 		A10000000000000000000116 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
+		A10000000000000000000131 /* DisplayRuntime.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DisplayRuntime.swift; sourceTree = "<group>"; };
+		A10000000000000000000132 /* CoreGraphicsDisplayEnumerator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CoreGraphicsDisplayEnumerator.swift; sourceTree = "<group>"; };
+		A10000000000000000000133 /* BuiltInBrightnessSource.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BuiltInBrightnessSource.swift; sourceTree = "<group>"; };
+		A10000000000000000000134 /* PrivateDisplayBridge.c */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.c; path = PrivateDisplayBridge.c; sourceTree = "<group>"; };
+		A10000000000000000000135 /* AppleSiliconDDC.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppleSiliconDDC.swift; sourceTree = "<group>"; };
+		A10000000000000000000136 /* DisplayManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DisplayManager.swift; sourceTree = "<group>"; };
+		A10000000000000000000137 /* BrightnessSyncController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BrightnessSyncController.swift; sourceTree = "<group>"; };
+		A10000000000000000000138 /* AmbientSync-Bridging-Header.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = AmbientSync-Bridging-Header.h; sourceTree = "<group>"; };
+		A10000000000000000000139 /* PrivateDisplayBridge.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = PrivateDisplayBridge.h; sourceTree = "<group>"; };
 		A10000000000000000000121 /* LogicTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LogicTests.swift; sourceTree = "<group>"; };
 		A10000000000000000000122 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
+		A10000000000000000000123 /* DisplayRuntimeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DisplayRuntimeTests.swift; sourceTree = "<group>"; };
 		A10000000000000000000201 /* AppKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = AppKit.framework; path = System/Library/Frameworks/AppKit.framework; sourceTree = SDKROOT; };
 		A10000000000000000000202 /* Foundation.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Foundation.framework; path = System/Library/Frameworks/Foundation.framework; sourceTree = SDKROOT; };
 		A10000000000000000000203 /* XCTest.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = XCTest.framework; path = System/Library/Frameworks/XCTest.framework; sourceTree = SDKROOT; };
+		A10000000000000000000204 /* CoreGraphics.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = CoreGraphics.framework; path = System/Library/Frameworks/CoreGraphics.framework; sourceTree = SDKROOT; };
+		A10000000000000000000205 /* IOKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = IOKit.framework; path = System/Library/Frameworks/IOKit.framework; sourceTree = SDKROOT; };
+		A10000000000000000000206 /* CoreDisplay.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = CoreDisplay.framework; path = /System/Library/Frameworks/CoreDisplay.framework; sourceTree = "<absolute>"; };
+		A10000000000000000000207 /* DisplayServices.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = DisplayServices.framework; path = /System/Library/PrivateFrameworks/DisplayServices.framework; sourceTree = "<absolute>"; };
 
 /* End PBXFileReference section */
 
@@ -43,6 +69,10 @@
 			files = (
 				A10000000000000000000016 /* AppKit.framework in Frameworks */,
 				A10000000000000000000017 /* Foundation.framework in Frameworks */,
+				A10000000000000000000018 /* CoreGraphics.framework in Frameworks */,
+				A10000000000000000000019 /* IOKit.framework in Frameworks */,
+				A1000000000000000000001A /* CoreDisplay.framework in Frameworks */,
+				A1000000000000000000001B /* DisplayServices.framework in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -76,6 +106,15 @@
 				A10000000000000000000113 /* BrightnessLogic.swift */,
 				A10000000000000000000114 /* DisplayIdentity.swift */,
 				A10000000000000000000115 /* SettingsStore.swift */,
+				A10000000000000000000131 /* DisplayRuntime.swift */,
+				A10000000000000000000132 /* CoreGraphicsDisplayEnumerator.swift */,
+				A10000000000000000000133 /* BuiltInBrightnessSource.swift */,
+				A10000000000000000000134 /* PrivateDisplayBridge.c */,
+				A10000000000000000000135 /* AppleSiliconDDC.swift */,
+				A10000000000000000000136 /* DisplayManager.swift */,
+				A10000000000000000000137 /* BrightnessSyncController.swift */,
+				A10000000000000000000138 /* AmbientSync-Bridging-Header.h */,
+				A10000000000000000000139 /* PrivateDisplayBridge.h */,
 				A10000000000000000000116 /* Info.plist */,
 			);
 			path = AmbientSync;
@@ -85,6 +124,7 @@
 			isa = PBXGroup;
 			children = (
 				A10000000000000000000121 /* LogicTests.swift */,
+				A10000000000000000000123 /* DisplayRuntimeTests.swift */,
 				A10000000000000000000122 /* Info.plist */,
 			);
 			path = AmbientSyncTests;
@@ -105,6 +145,10 @@
 				A10000000000000000000201 /* AppKit.framework */,
 				A10000000000000000000202 /* Foundation.framework */,
 				A10000000000000000000203 /* XCTest.framework */,
+				A10000000000000000000204 /* CoreGraphics.framework */,
+				A10000000000000000000205 /* IOKit.framework */,
+				A10000000000000000000206 /* CoreDisplay.framework */,
+				A10000000000000000000207 /* DisplayServices.framework */,
 			);
 			name = Frameworks;
 			sourceTree = "<group>";
@@ -215,6 +259,13 @@
 				A10000000000000000000013 /* BrightnessLogic.swift in Sources */,
 				A10000000000000000000014 /* DisplayIdentity.swift in Sources */,
 				A10000000000000000000015 /* SettingsStore.swift in Sources */,
+				A10000000000000000000031 /* DisplayRuntime.swift in Sources */,
+				A10000000000000000000032 /* CoreGraphicsDisplayEnumerator.swift in Sources */,
+				A10000000000000000000033 /* BuiltInBrightnessSource.swift in Sources */,
+				A10000000000000000000034 /* PrivateDisplayBridge.c in Sources */,
+				A10000000000000000000035 /* AppleSiliconDDC.swift in Sources */,
+				A10000000000000000000036 /* DisplayManager.swift in Sources */,
+				A10000000000000000000037 /* BrightnessSyncController.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -223,6 +274,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				A10000000000000000000021 /* LogicTests.swift in Sources */,
+				A10000000000000000000023 /* DisplayRuntimeTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -259,6 +311,14 @@
 				GCC_C_LANGUAGE_STANDARD = gnu17;
 				MACOSX_DEPLOYMENT_TARGET = 26.0;
 				SDKROOT = macosx;
+				FRAMEWORK_SEARCH_PATHS = (
+					"$(inherited)",
+					"/System/Library/PrivateFrameworks",
+				);
+				SYSTEM_FRAMEWORK_SEARCH_PATHS = (
+					"$(inherited)",
+					"$(SYSTEM_LIBRARY_DIR)/PrivateFrameworks",
+				);
 				SWIFT_STRICT_CONCURRENCY = complete;
 				SWIFT_VERSION = 6.0;
 			};
@@ -273,6 +333,14 @@
 				GCC_C_LANGUAGE_STANDARD = gnu17;
 				MACOSX_DEPLOYMENT_TARGET = 26.0;
 				SDKROOT = macosx;
+				FRAMEWORK_SEARCH_PATHS = (
+					"$(inherited)",
+					"/System/Library/PrivateFrameworks",
+				);
+				SYSTEM_FRAMEWORK_SEARCH_PATHS = (
+					"$(inherited)",
+					"$(SYSTEM_LIBRARY_DIR)/PrivateFrameworks",
+				);
 				SWIFT_STRICT_CONCURRENCY = complete;
 				SWIFT_VERSION = 6.0;
 			};
@@ -297,6 +365,7 @@
 				PRODUCT_BUNDLE_IDENTIFIER = cloud.piatkowski.AmbientSync;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SUPPORTED_PLATFORMS = macosx;
+				SWIFT_OBJC_BRIDGING_HEADER = AmbientSync/AmbientSync-Bridging-Header.h;
 				SWIFT_EMIT_LOC_STRINGS = NO;
 				SWIFT_VERSION = 6.0;
 			};
@@ -320,6 +389,7 @@
 				PRODUCT_BUNDLE_IDENTIFIER = cloud.piatkowski.AmbientSync;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SUPPORTED_PLATFORMS = macosx;
+				SWIFT_OBJC_BRIDGING_HEADER = AmbientSync/AmbientSync-Bridging-Header.h;
 				SWIFT_EMIT_LOC_STRINGS = NO;
 				SWIFT_VERSION = 6.0;
 			};
