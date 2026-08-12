@@ -14,6 +14,7 @@ final class AmbientSyncCoordinator {
     private var started = false
     private var shutdownRequested = false
     private var runtimeTask: Task<Void, Never>?
+    private var settingsWindowCloseObserver: NSObjectProtocol?
 
     init(safeSmoke: Bool = false) {
         self.safeSmoke = safeSmoke
@@ -116,7 +117,39 @@ final class AmbientSyncCoordinator {
 
     func showSettings() {
         loginItemManager.refresh()
+        let wasAccessory = NSApp.activationPolicy() == .accessory
+        if wasAccessory {
+            NSApp.setActivationPolicy(.regular)
+        }
         settingsWindowController.showSettings()
+
+        if wasAccessory, let window = settingsWindowController.window {
+            observeSettingsWindowClose(window)
+        }
+    }
+
+    private func observeSettingsWindowClose(_ window: NSWindow) {
+        if let observer = settingsWindowCloseObserver {
+            NotificationCenter.default.removeObserver(observer)
+        }
+
+        settingsWindowCloseObserver = NotificationCenter.default.addObserver(
+            forName: NSWindow.willCloseNotification,
+            object: window,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                self?.restoreAccessoryPolicy()
+            }
+        }
+    }
+
+    private func restoreAccessoryPolicy() {
+        if let observer = settingsWindowCloseObserver {
+            NotificationCenter.default.removeObserver(observer)
+            settingsWindowCloseObserver = nil
+        }
+        NSApp.setActivationPolicy(.accessory)
     }
 
     func shutdown() {

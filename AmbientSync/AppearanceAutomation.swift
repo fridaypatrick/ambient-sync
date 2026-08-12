@@ -138,16 +138,20 @@ public final class SystemEventsAppearanceAdapter: SystemAppearanceAdapter {
             """
             tell application "System Events"
                 tell appearance preferences
-                    return dark mode
+                    if dark mode then
+                        return "dark"
+                    else
+                        return "light"
+                    end if
                 end tell
             end tell
             """
         )
 
-        guard result.descriptorType == typeBoolean else {
+        guard let mode = SystemEventsAppearanceResponseParser.mode(from: result) else {
             throw AppearanceAutomationError.invalidResponse
         }
-        return result.booleanValue ? .dark : .light
+        return mode
     }
 
     public func setMode(_ mode: AppearanceMode) throws {
@@ -184,5 +188,33 @@ public final class SystemEventsAppearanceAdapter: SystemAppearanceAdapter {
 
         let message = error?["NSAppleScriptErrorMessage"] as? String
         return .requestFailed(message ?? "System Events returned an Apple Events error.")
+    }
+}
+
+/// Converts only known System Events appearance response representations.
+/// AppleScript boolean literals use `typeTrue`/`typeFalse`, while explicit
+/// mode tokens use text descriptors; arbitrary text and descriptor types are
+/// rejected so they cannot be mistaken for an appearance mode.
+enum SystemEventsAppearanceResponseParser {
+    static func mode(from descriptor: NSAppleEventDescriptor) -> AppearanceMode? {
+        switch descriptor.descriptorType {
+        case typeBoolean:
+            return descriptor.booleanValue ? .dark : .light
+        case typeTrue:
+            return .dark
+        case typeFalse:
+            return .light
+        case typeChar, typeUnicodeText, typeUTF8Text, typeStyledText:
+            switch descriptor.stringValue {
+            case "dark":
+                return .dark
+            case "light":
+                return .light
+            default:
+                return nil
+            }
+        default:
+            return nil
+        }
     }
 }

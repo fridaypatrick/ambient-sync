@@ -1,9 +1,20 @@
+import AppKit
 import Foundation
 import XCTest
 @testable import AmbientSync
 
 @MainActor
 final class IntegrationTests: XCTestCase {
+    func testAppLifecycleStateSuppressesInitialUntitledOpenOnlyBeforeLaunch() {
+        var state = AppLifecycleState()
+
+        XCTAssertFalse(state.shouldShowSettingsForUntitledOpen)
+
+        state.markDidFinishLaunching()
+
+        XCTAssertTrue(state.shouldShowSettingsForUntitledOpen)
+    }
+
     func testAppearanceRedundantCurrentModeSuppressesRequest() {
         let adapter = TestAppearanceAdapter(mode: .dark)
         let controller = AppearanceAutomationController(adapter: adapter)
@@ -75,6 +86,59 @@ final class IntegrationTests: XCTestCase {
         XCTAssertTrue(controller.status.userMessage.contains("Privacy & Security"))
     }
 
+    func testSystemEventsAppearanceResponseParserAcceptsKnownBooleanDescriptors() {
+        XCTAssertEqual(
+            SystemEventsAppearanceResponseParser.mode(
+                from: NSAppleEventDescriptor(boolean: true)
+            ),
+            .dark
+        )
+        XCTAssertEqual(
+            SystemEventsAppearanceResponseParser.mode(
+                from: NSAppleEventDescriptor(boolean: false)
+            ),
+            .light
+        )
+
+        XCTAssertEqual(
+            SystemEventsAppearanceResponseParser.mode(from: appleScriptDescriptor("return true")),
+            .dark
+        )
+        XCTAssertEqual(
+            SystemEventsAppearanceResponseParser.mode(from: appleScriptDescriptor("return false")),
+            .light
+        )
+    }
+
+    func testSystemEventsAppearanceResponseParserAcceptsExactModeTokens() {
+        XCTAssertEqual(
+            SystemEventsAppearanceResponseParser.mode(
+                from: NSAppleEventDescriptor(string: "dark")
+            ),
+            .dark
+        )
+        XCTAssertEqual(
+            SystemEventsAppearanceResponseParser.mode(
+                from: NSAppleEventDescriptor(string: "light")
+            ),
+            .light
+        )
+    }
+
+    func testSystemEventsAppearanceResponseParserRejectsUnknownResponses() {
+        let invalidResponses = [
+            NSAppleEventDescriptor(string: "true"),
+            NSAppleEventDescriptor(string: "false"),
+            NSAppleEventDescriptor(string: "Dark"),
+            NSAppleEventDescriptor(string: " dark "),
+            NSAppleEventDescriptor(int32: 1)
+        ]
+
+        for response in invalidResponses {
+            XCTAssertNil(SystemEventsAppearanceResponseParser.mode(from: response))
+        }
+    }
+
     func testLoginManagerReconcilesPersistedSettingToActualServiceState() {
         let suiteName = "AmbientSyncTests.Login.\(UUID().uuidString)"
         let defaults = UserDefaults(suiteName: suiteName)!
@@ -130,6 +194,14 @@ final class IntegrationTests: XCTestCase {
         XCTAssertNotNil(manager.statusMessage)
     }
 
+}
+
+private func appleScriptDescriptor(_ source: String) -> NSAppleEventDescriptor {
+    let script = NSAppleScript(source: source)!
+    var error: NSDictionary?
+    let result = script.executeAndReturnError(&error)
+    XCTAssertNil(error)
+    return result
 }
 
 @MainActor

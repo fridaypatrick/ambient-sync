@@ -4,9 +4,22 @@ import AppKit
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private var coordinator: AmbientSyncCoordinator?
+    private var lifecycleState = AppLifecycleState()
+
+    static func main() {
+        // Attach delegate explicitly before entering AppKit's event loop.
+        // This source-only bundle has no nib/delegate metadata for
+        // NSApplicationMain to discover, so relying on generated @main setup
+        // leaves NSApp.delegate nil and drops launch/reopen callbacks.
+        let application = NSApplication.shared
+        let delegate = AppDelegate()
+        application.delegate = delegate
+        application.run()
+    }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         _ = notification
+        lifecycleState.markDidFinishLaunching()
         NSApp.setActivationPolicy(.accessory)
 
         // XCTest launches this app as a test host. Keep production display
@@ -29,6 +42,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         _ = sender
         _ = flag
         coordinator?.showSettings()
+        // Settings is already presented above. Returning false prevents AppKit
+        // from following this callback with applicationOpenUntitledFile and
+        // presenting Settings a second time.
+        return false
+    }
+
+    func applicationOpenUntitledFile(_ sender: NSApplication) -> Bool {
+        _ = sender
+        let shouldShow = lifecycleState.shouldShowSettingsForUntitledOpen
+        guard shouldShow else {
+            return false
+        }
+        coordinator?.showSettings()
         return true
     }
 
@@ -42,5 +68,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationWillTerminate(_ notification: Notification) {
         _ = notification
         coordinator?.shutdown()
+    }
+}
+
+struct AppLifecycleState {
+    private(set) var didFinishLaunching = false
+
+    mutating func markDidFinishLaunching() {
+        didFinishLaunching = true
+    }
+
+    var shouldShowSettingsForUntitledOpen: Bool {
+        didFinishLaunching
     }
 }
