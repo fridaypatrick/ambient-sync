@@ -187,6 +187,219 @@ final class LogicTests: XCTestCase {
         clock.now = Date(timeIntervalSince1970: 60)
         XCTAssertEqual(controller.decision(for: 0.80, currentMode: .dark), .request(.light))
     }
+
+    func testAssumedMaximumDefaultsPersistsAndClampsPerDisplayIdentity() {
+        let suiteName = "AmbientSyncTests.AssumedMaximum.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defaults.removePersistentDomain(forName: suiteName)
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+
+        let identity = DisplayIdentity(
+            descriptor: DisplayDescriptor(
+                manufacturer: "Samsung",
+                product: "LS34A650U",
+                serialNumber: "SN-42"
+            )
+        )
+        let store = SettingsStore(defaults: defaults)
+
+        XCTAssertEqual(store.assumedMaximum(for: identity), 100)
+        XCTAssertEqual(store.setAssumedMaximum(255, for: identity), 255)
+        XCTAssertEqual(SettingsStore(defaults: defaults).assumedMaximum(for: identity), 255)
+        XCTAssertEqual(store.setAssumedMaximum(0, for: identity), 1)
+        XCTAssertEqual(store.setAssumedMaximum(65_536, for: identity), UInt16.max)
+        XCTAssertEqual(SettingsStore(defaults: defaults).assumedMaximum(for: identity), UInt16.max)
+    }
+
+    func testWriteOnlyProbeFallbackRequiresHighConfidenceAndPreservesVerifiedReadPath() {
+        XCTAssertEqual(
+            ddcProbeClassification(
+                readSucceeded: true,
+                readMaximum: 254,
+                matchConfidenceIsHigh: false,
+                assumedMaximum: 100
+            ),
+            .verified(maximum: 254)
+        )
+        XCTAssertEqual(
+            ddcProbeClassification(
+                readSucceeded: false,
+                readMaximum: 0,
+                matchConfidenceIsHigh: true,
+                assumedMaximum: 255
+            ),
+            .writeOnlyAssumed(maximum: 255)
+        )
+        XCTAssertEqual(
+            ddcProbeClassification(
+                readSucceeded: false,
+                readMaximum: 0,
+                matchConfidenceIsHigh: false,
+                assumedMaximum: 255
+            ),
+            .unsupported
+        )
+    }
+
+    func testHighConfidenceClassificationUsesLocationOrThreeIndependentSignals() {
+        XCTAssertEqual(
+            ASDDCClassifyMatchConfidence(false, 2),
+            ASDDCMatchConfidenceLow
+        )
+        XCTAssertEqual(
+            ASDDCClassifyMatchConfidence(false, 3),
+            ASDDCMatchConfidenceHigh
+        )
+        // Samsung-like service match: location score is decisive even when
+        // VCP brightness read later fails.
+        XCTAssertEqual(
+            ASDDCClassifyMatchConfidence(true, 0),
+            ASDDCMatchConfidenceHigh
+        )
+    }
+
+    func testMatchEvidenceRejectsZeroAndDefaultMetadata() {
+        let evidence = scoreEvidence(
+            displayLocation: "",
+            serviceLocation: "",
+            displayProductName: "",
+            serviceProductName: "",
+            displaySerial: 0,
+            serviceSerial: 0,
+            vendorID: 0,
+            productID: 0,
+            manufactureYear: 0,
+            manufactureWeek: 0,
+            horizontalSize: 0,
+            verticalSize: 0,
+            serviceEDIDUUID: "00000000-0000-0000-0000-000000000000"
+        )
+
+        XCTAssertEqual(evidence.score, 0)
+        XCTAssertEqual(evidence.independentSignalCount, 0)
+        XCTAssertEqual(
+            ASDDCClassifyAssignedMatch(evidence, nil, 0, nil, 0),
+            ASDDCMatchConfidenceNone
+        )
+    }
+
+    func testValidSamsungLikeLocationIsHighConfidenceInAssignmentPath() {
+        let evidence = scoreEvidence(
+            displayLocation: "IOService:/display/samsung",
+            serviceLocation: "IOService:/display/samsung"
+        )
+
+        XCTAssertTrue(evidence.locationMatch)
+        XCTAssertEqual(
+            ASDDCClassifyAssignedMatch(evidence, nil, 0, nil, 0),
+            ASDDCMatchConfidenceHigh
+        )
+    }
+
+    func testThreeValidIndependentMetadataDimensionsAreHighConfidence() {
+        let evidence = scoreEvidence(
+            vendorID: 0x4C2D,
+            productID: 0x7145,
+            manufactureYear: 2022,
+            manufactureWeek: 26,
+            horizontalSize: 800,
+            verticalSize: 340,
+            serviceEDIDUUID: "4C2D4571-0000-0000-1A20-0104B5502278"
+        )
+
+        XCTAssertEqual(evidence.independentSignalCount, 3)
+        XCTAssertEqual(
+            ASDDCClassifyAssignedMatch(evidence, nil, 0, nil, 0),
+            ASDDCMatchConfidenceHigh
+        )
+    }
+
+    func testVendorAndProductSlicesCountAsOneLowConfidenceDimension() {
+        let evidence = scoreEvidence(
+            vendorID: 0x4C2D,
+            productID: 0x7145,
+            serviceEDIDUUID: "4C2D4571-0000-0000-0000-000000000000"
+        )
+
+        XCTAssertEqual(evidence.independentSignalCount, 1)
+        XCTAssertEqual(
+            ASDDCClassifyAssignedMatch(evidence, nil, 0, nil, 0),
+            ASDDCMatchConfidenceLow
+        )
+    }
+
+    func testEqualHighConfidenceAssignmentTieIsNotWriteOnlyEligible() {
+        let selected = scoreEvidence(
+            vendorID: 0x4C2D,
+            productID: 0x7145,
+            manufactureYear: 2022,
+            manufactureWeek: 26,
+            horizontalSize: 800,
+            verticalSize: 340,
+            serviceEDIDUUID: "4C2D4571-0000-0000-1A20-0104B5502278"
+        )
+        var tiedAlternative = selected
+
+        XCTAssertEqual(
+            ASDDCClassifyAssignedMatch(
+                selected,
+                &tiedAlternative,
+                1,
+                nil,
+                0
+            ),
+            ASDDCMatchConfidenceLow
+        )
+    }
+
+    func testDisplaySupportLabelsDoNotOverclaimWriteOnlyVerification() {
+        XCTAssertTrue(DisplaySupportStatus.verifiedExternal.userFacingLabel.contains("verified"))
+        XCTAssertTrue(DisplaySupportStatus.writeOnlyExternal.userFacingLabel.contains("unverified (write-only)"))
+        XCTAssertTrue(DisplaySupportStatus.degradedWriteOnlyExternal.userFacingLabel.contains("degraded"))
+        XCTAssertTrue(DisplaySupportStatus.degradedWriteOnlyExternal.userFacingLabel.contains("unverified"))
+    }
+}
+
+private func scoreEvidence(
+    displayLocation: String = "",
+    serviceLocation: String = "",
+    displayProductName: String = "",
+    serviceProductName: String = "",
+    displaySerial: Int64 = 0,
+    serviceSerial: Int64 = 0,
+    vendorID: Int64 = 0,
+    productID: Int64 = 0,
+    manufactureYear: Int64 = 0,
+    manufactureWeek: Int64 = 0,
+    horizontalSize: Int64 = 0,
+    verticalSize: Int64 = 0,
+    serviceEDIDUUID: String = ""
+) -> ASDDCMatchEvidence {
+    displayLocation.withCString { displayLocationPointer in
+        serviceLocation.withCString { serviceLocationPointer in
+            displayProductName.withCString { displayProductNamePointer in
+                serviceProductName.withCString { serviceProductNamePointer in
+                    serviceEDIDUUID.withCString { serviceEDIDUUIDPointer in
+                        ASDDCScoreMatchEvidence(
+                            displayLocationPointer,
+                            serviceLocationPointer,
+                            displayProductNamePointer,
+                            serviceProductNamePointer,
+                            displaySerial,
+                            serviceSerial,
+                            manufactureYear,
+                            manufactureWeek,
+                            vendorID,
+                            productID,
+                            horizontalSize,
+                            verticalSize,
+                            serviceEDIDUUIDPointer
+                        )
+                    }
+                }
+            }
+        }
+    }
 }
 
 private final class TestClock: AmbientClock {

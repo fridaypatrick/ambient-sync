@@ -26,16 +26,18 @@ public actor DisplayManager: DisplayRuntimeProviding {
     private var refreshTask: Task<Void, Never>?
     private var registration: DisplayReconfigurationRegistration?
     private var stateUpdateHandler: DisplayStateUpdateHandler?
+    private var degradedKeys: Set<DisplayTargetKey> = []
 
     public init(
         enumerator: any DisplayEnumerator = CoreGraphicsDisplayEnumerator(),
-        externalProvider: any ExternalDisplayTransportProvider = AppleSiliconDDCTransportProvider(),
+        externalProvider: (any ExternalDisplayTransportProvider)? = nil,
+        settings: SettingsStore = SettingsStore(),
         lifecycleNotificationCenter: NotificationCenter = NSWorkspace.shared.notificationCenter,
         debounceInterval: Duration = .milliseconds(250),
         stateUpdateHandler: DisplayStateUpdateHandler? = nil
     ) {
         self.enumerator = enumerator
-        self.externalProvider = externalProvider
+        self.externalProvider = externalProvider ?? AppleSiliconDDCTransportProvider(settings: settings)
         self.observerStore = LifecycleObserverStore(center: lifecycleNotificationCenter)
         self.debounceInterval = debounceInterval
         self.stateUpdateHandler = stateUpdateHandler
@@ -124,6 +126,83 @@ public actor DisplayManager: DisplayRuntimeProviding {
         DisplayRuntimeState(snapshot: snapshot, externalTargets: externalTargets)
     }
 
+    public func markTargetDegraded(_ key: DisplayTargetKey, generation: UInt64) async {
+        guard let target = currentTarget(for: key, generation: generation) else { return }
+        let didInsert = degradedKeys.insert(key).inserted
+        let snapshotIsDegraded = snapshot.displays.contains {
+            $0.record.displayID == key.displayID &&
+            $0.record.identity == key.identity &&
+            $0.support.isDegraded
+        }
+        guard didInsert || !snapshotIsDegraded else { return }
+        updateSnapshotSupport(for: target, degraded: true)
+    }
+
+    public func retryTarget(_ key: DisplayTargetKey, generation: UInt64? = nil) async {
+        clearTargetDegraded(key, generation: generation)
+    }
+
+    public func markTargetHealthy(_ key: DisplayTargetKey, generation: UInt64) async {
+        clearTargetDegraded(key, generation: generation)
+    }
+
+    private func currentTarget(
+        for key: DisplayTargetKey,
+        generation: UInt64?
+    ) -> ExternalDisplayTarget? {
+        externalTargets.first {
+            $0.key == key && (generation == nil || $0.generation == generation)
+        }
+    }
+
+    private func clearTargetDegraded(_ key: DisplayTargetKey, generation: UInt64?) {
+        guard let target = currentTarget(for: key, generation: generation) else { return }
+        let didRemoveKey = degradedKeys.remove(key) != nil
+        let snapshotIsDegraded = snapshot.displays.contains {
+            $0.record.displayID == key.displayID &&
+            $0.record.identity == key.identity &&
+            $0.support.isDegraded
+        }
+        guard didRemoveKey || snapshotIsDegraded else { return }
+        updateSnapshotSupport(for: target, degraded: false)
+    }
+
+    public func updateAssumedMaximum(_ maximum: UInt16, for identity: DisplayIdentity) async {
+        let normalized = SettingsStore.clampAssumedMaximum(Int(maximum))
+        await externalProvider.updateAssumedMaximum(normalized, for: identity)
+
+        var didChange = false
+        externalTargets = externalTargets.map { target in
+            guard target.record.identity == identity, target.capability.isWriteOnly else {
+                return target
+            }
+            didChange = true
+            return ExternalDisplayTarget(
+                record: target.record,
+                sink: target.sink,
+                capability: .writeOnlyAssumed(maximum: normalized),
+                generation: target.generation
+            )
+        }
+
+        guard didChange else { return }
+        snapshot = DisplaySnapshot(
+            generation: snapshot.generation,
+            displays: snapshot.displays.map { state in
+                guard state.record.identity == identity, state.capability?.isWriteOnly == true else {
+                    return state
+                }
+                return DisplayState(
+                    record: state.record,
+                    support: state.support,
+                    capability: .writeOnlyAssumed(maximum: normalized)
+                )
+            },
+            builtIn: snapshot.builtIn
+        )
+        stateUpdateHandler?(snapshot)
+    }
+
     private func performRefresh(for generation: UInt64) async {
         let records = await enumerator.enumerate()
         guard running, lifecycleGeneration == generation else { return }
@@ -144,6 +223,7 @@ public actor DisplayManager: DisplayRuntimeProviding {
         )
 
         let nextGeneration = snapshot.generation &+ 1
+        degradedKeys.removeAll()
         var states: [DisplayState] = []
         var nextTargets: [ExternalDisplayTarget] = []
         states.reserveCapacity(records.count)
@@ -152,11 +232,21 @@ public actor DisplayManager: DisplayRuntimeProviding {
             if record.isBuiltIn {
                 states.append(DisplayState(record: record, support: .builtIn))
             } else if let binding = bindingsByDisplayID[record.displayID] {
-                states.append(DisplayState(record: record, support: .controllableExternal))
+                let support: DisplaySupportStatus = binding.capability.isWriteOnly
+                    ? .writeOnlyExternal
+                    : .verifiedExternal
+                states.append(
+                    DisplayState(
+                        record: record,
+                        support: support,
+                        capability: binding.capability
+                    )
+                )
                 nextTargets.append(
                     ExternalDisplayTarget(
                         record: record,
                         sink: binding.sink,
+                        capability: binding.capability,
                         generation: nextGeneration
                     )
                 )
@@ -171,6 +261,37 @@ public actor DisplayManager: DisplayRuntimeProviding {
             builtIn: records.first(where: \.isBuiltIn)
         )
         externalTargets = nextTargets
+        stateUpdateHandler?(snapshot)
+    }
+
+    private func updateSnapshotSupport(for target: ExternalDisplayTarget, degraded: Bool) {
+        snapshot = DisplaySnapshot(
+            generation: snapshot.generation,
+            displays: snapshot.displays.map { state in
+                guard state.record.displayID == target.key.displayID,
+                      state.record.identity == target.key.identity,
+                      let capability = state.capability
+                else {
+                    return state
+                }
+                let support: DisplaySupportStatus
+                if degraded {
+                    support = capability.isWriteOnly
+                        ? .degradedWriteOnlyExternal
+                        : .degradedExternal
+                } else {
+                    support = capability.isWriteOnly
+                        ? .writeOnlyExternal
+                        : .verifiedExternal
+                }
+                return DisplayState(
+                    record: state.record,
+                    support: support,
+                    capability: capability
+                )
+            },
+            builtIn: snapshot.builtIn
+        )
         stateUpdateHandler?(snapshot)
     }
 

@@ -96,6 +96,10 @@ public struct DisplayIdentity: Codable, Equatable, Hashable, Sendable {
         "\(settingsKey).maximum"
     }
 
+    public var assumedMaximumSettingsKey: String {
+        "\(settingsKey).assumedMaximum"
+    }
+
     private static func nonEmpty(_ value: String?) -> String? {
         guard let value else { return nil }
         let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)

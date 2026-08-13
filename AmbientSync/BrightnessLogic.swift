@@ -153,6 +153,10 @@ public struct IntegerDDCTargetSuppressor: Equatable, Sendable {
     public mutating func reset() {
         lastTarget = nil
     }
+
+    public mutating func rollback(to previousTarget: Int?) {
+        lastTarget = previousTarget
+    }
 }
 
 /// Pure decision pipeline used by a future display transport coordinator.

@@ -20,6 +20,8 @@ This is a source-only project. Current support:
 
 Per-display mappings use stable display identities when available. First-run defaults are 0–100% external mapping, Dark at 25%, Light at 40%, brightness synchronization enabled, menu icon visible, and Launch at Login disabled.
 
+Displays whose VCP brightness reads fail are included only when their private IOAVService match is high-confidence. AmbientSync labels these controls **unverified (write-only)** and uses a persisted assumed VCP maximum of 100 by default; Settings supports 100, 255, or a custom maximum from 1 through 65535. Three consecutive transport write failures pause that display until re-enumeration or explicit Retry. Discovery and lifecycle rebuilds do not issue brightness writes.
+
 ## Build and test
 
 Run from repository root after a clean clone. These commands build and test the checked-in `AmbientSync` scheme without code signing:
@@ -44,7 +46,7 @@ For interactive local use, open `AmbientSync.xcodeproj` in Xcode. Use local ad-h
 
 ## Usage
 
-Launch AmbientSync from Xcode or a locally built app. Use the menu-bar icon for **Settings…** and **Quit AmbientSync**. Settings includes brightness synchronization, detected display status, per-display minimum and maximum mapping, Dark and Light thresholds, Launch at Login, menu-icon visibility, and appearance-automation status.
+Launch AmbientSync from Xcode or a locally built app. Use the menu-bar icon for **Settings…** and **Quit AmbientSync**. Settings includes brightness synchronization, detected display status, per-display minimum and maximum mapping, write-only assumed maximum controls, degraded-state Retry, Dark and Light thresholds, Launch at Login, menu-icon visibility, and appearance-automation status.
 
 To hide the menu icon, turn off **Show menu-bar icon** in Settings. If it is hidden, reopen the already-running app from Finder, Spotlight, or Launchpad to show Settings and recover access. A 10–80% mapping produces 10%, 45%, and 80% external targets for internal brightness values of 0%, 50%, and 100%.
 

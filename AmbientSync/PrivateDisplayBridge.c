@@ -321,16 +321,6 @@ static bool uuidSliceEquals(
     return strcasecmp(actual, expected) == 0;
 }
 
-static int64_t clampInt64(int64_t value, int64_t minimum, int64_t maximum) {
-    if (value < minimum) {
-        return minimum;
-    }
-    if (value > maximum) {
-        return maximum;
-    }
-    return value;
-}
-
 static void uppercaseHex(char *destination, size_t capacity, uint64_t value, int width) {
     if (destination == NULL || capacity == 0) {
         return;
@@ -338,38 +328,60 @@ static void uppercaseHex(char *destination, size_t capacity, uint64_t value, int
     (void)snprintf(destination, capacity, "%0*llX", width, (unsigned long long)value);
 }
 
-static int matchScore(CGDirectDisplayID displayID, const ASServiceInfo *service) {
-    if (service == NULL || CoreDisplay_DisplayCreateInfoDictionary == NULL) {
-        return 0;
+static bool hasText(const char *value) {
+    return value != NULL && value[0] != '\0';
+}
+
+static bool validEDIDNumber(int64_t value) {
+    return value > 0 && value <= 0xFFFF;
+}
+
+static bool validManufactureYear(int64_t value) {
+    return value >= 1990 && value <= 2100;
+}
+
+static bool validManufactureWeek(int64_t value) {
+    return value >= 1 && value <= 53;
+}
+
+static bool validPhysicalDimension(int64_t value) {
+    return value >= 10 && value <= 10000;
+}
+
+static bool validSerialNumber(int64_t value) {
+    return value > 0;
+}
+
+ASDDCMatchEvidence ASDDCScoreMatchEvidence(
+    const char *displayLocation,
+    const char *serviceLocation,
+    const char *displayProductName,
+    const char *serviceProductName,
+    int64_t displaySerial,
+    int64_t serviceSerial,
+    int64_t manufactureYear,
+    int64_t manufactureWeek,
+    int64_t vendorID,
+    int64_t productID,
+    int64_t horizontalSize,
+    int64_t verticalSize,
+    const char *serviceEDIDUUID
+) {
+    ASDDCMatchEvidence evidence = {0};
+
+    if (hasText(displayLocation) && hasText(serviceLocation) &&
+        strcmp(displayLocation, serviceLocation) == 0) {
+        evidence.score += 100;
+        evidence.locationMatch = true;
     }
 
-    CFDictionaryRef dictionary = CoreDisplay_DisplayCreateInfoDictionary(displayID);
-    if (dictionary == NULL) {
-        return 0;
-    }
-
-    int score = 0;
-    int64_t manufactureYear = 0;
-    int64_t manufactureWeek = 0;
-    int64_t vendorID = 0;
-    int64_t productID = 0;
-    int64_t verticalSize = 0;
-    int64_t horizontalSize = 0;
-
-    if (valueFromDictionary(dictionary, CFSTR("DisplayYearOfManufacture"), &manufactureYear) &&
-        valueFromDictionary(dictionary, CFSTR("DisplayWeekOfManufacture"), &manufactureWeek) &&
-        valueFromDictionary(dictionary, CFSTR("DisplayVendorID"), &vendorID) &&
-        valueFromDictionary(dictionary, CFSTR("DisplayProductID"), &productID) &&
-        valueFromDictionary(dictionary, CFSTR("DisplayVerticalImageSize"), &verticalSize) &&
-        valueFromDictionary(dictionary, CFSTR("DisplayHorizontalImageSize"), &horizontalSize)) {
+    const bool hasEDIDUUID = hasText(serviceEDIDUUID);
+    if (hasEDIDUUID && validEDIDNumber(vendorID) && validEDIDNumber(productID)) {
         char expected[8] = {0};
+        uppercaseHex(expected, sizeof(expected), (uint64_t)vendorID, 4);
+        bool vendorMatches = uuidSliceEquals(serviceEDIDUUID, 0, expected);
 
-        uppercaseHex(expected, sizeof(expected), (uint64_t)clampInt64(vendorID, 0, 0xFFFF), 4);
-        if (uuidSliceEquals(service->edidUUID, 0, expected)) {
-            score += 1;
-        }
-
-        uint16_t product = (uint16_t)clampInt64(productID, 0, 0xFFFF);
+        uint16_t product = (uint16_t)productID;
         (void)snprintf(
             expected,
             sizeof(expected),
@@ -377,47 +389,114 @@ static int matchScore(CGDirectDisplayID displayID, const ASServiceInfo *service)
             (unsigned int)(product & 0xFF),
             (unsigned int)((product >> 8) & 0xFF)
         );
-        if (uuidSliceEquals(service->edidUUID, 4, expected)) {
-            score += 1;
-        }
+        bool productMatches = uuidSliceEquals(serviceEDIDUUID, 4, expected);
 
-        (void)snprintf(
-            expected,
-            sizeof(expected),
-            "%02X%02X",
-            (unsigned int)clampInt64(manufactureWeek, 0, 0xFF),
-            (unsigned int)clampInt64(manufactureYear - 1990, 0, 0xFF)
-        );
-        if (uuidSliceEquals(service->edidUUID, 19, expected)) {
-            score += 1;
-        }
-
-        (void)snprintf(
-            expected,
-            sizeof(expected),
-            "%02X%02X",
-            (unsigned int)clampInt64(horizontalSize / 10, 0, 0xFF),
-            (unsigned int)clampInt64(verticalSize / 10, 0, 0xFF)
-        );
-        if (uuidSliceEquals(service->edidUUID, 30, expected)) {
-            score += 1;
+        // Vendor and product identify one EDID identity dimension, not two.
+        if (vendorMatches && productMatches) {
+            evidence.score += 20;
+            evidence.independentSignalCount += 1;
         }
     }
+
+    if (hasEDIDUUID && validManufactureYear(manufactureYear) &&
+        validManufactureWeek(manufactureWeek)) {
+        char expected[8] = {0};
+        (void)snprintf(
+            expected,
+            sizeof(expected),
+            "%02X%02X",
+            (unsigned int)manufactureWeek,
+            (unsigned int)(manufactureYear - 1990)
+        );
+        if (uuidSliceEquals(serviceEDIDUUID, 19, expected)) {
+            evidence.score += 5;
+            evidence.independentSignalCount += 1;
+        }
+    }
+
+    if (hasEDIDUUID && validPhysicalDimension(horizontalSize) &&
+        validPhysicalDimension(verticalSize)) {
+        char expected[8] = {0};
+        (void)snprintf(
+            expected,
+            sizeof(expected),
+            "%02X%02X",
+            (unsigned int)(horizontalSize / 10),
+            (unsigned int)(verticalSize / 10)
+        );
+        if (uuidSliceEquals(serviceEDIDUUID, 30, expected)) {
+            evidence.score += 5;
+            evidence.independentSignalCount += 1;
+        }
+    }
+
+    if (hasText(displayProductName) && hasText(serviceProductName) &&
+        strcmp(displayProductName, serviceProductName) == 0) {
+        evidence.score += 3;
+        evidence.independentSignalCount += 1;
+    }
+
+    if (validSerialNumber(displaySerial) && validSerialNumber(serviceSerial) &&
+        displaySerial == serviceSerial) {
+        evidence.score += 10;
+        evidence.independentSignalCount += 1;
+    }
+
+    return evidence;
+}
+
+static ASDDCMatchEvidence matchEvidence(CGDirectDisplayID displayID, const ASServiceInfo *service) {
+    ASDDCMatchEvidence evidence = {0};
+    if (service == NULL || CoreDisplay_DisplayCreateInfoDictionary == NULL) {
+        return evidence;
+    }
+
+    CFDictionaryRef dictionary = CoreDisplay_DisplayCreateInfoDictionary(displayID);
+    if (dictionary == NULL) {
+        return evidence;
+    }
+
+    int64_t manufactureYear = 0;
+    int64_t manufactureWeek = 0;
+    int64_t vendorID = 0;
+    int64_t productID = 0;
+    int64_t verticalSize = 0;
+    int64_t horizontalSize = 0;
+
+    (void)valueFromDictionary(
+        dictionary,
+        CFSTR("DisplayYearOfManufacture"),
+        &manufactureYear
+    );
+    (void)valueFromDictionary(
+        dictionary,
+        CFSTR("DisplayWeekOfManufacture"),
+        &manufactureWeek
+    );
+    (void)valueFromDictionary(dictionary, CFSTR("DisplayVendorID"), &vendorID);
+    (void)valueFromDictionary(dictionary, CFSTR("DisplayProductID"), &productID);
+    (void)valueFromDictionary(
+        dictionary,
+        CFSTR("DisplayVerticalImageSize"),
+        &verticalSize
+    );
+    (void)valueFromDictionary(
+        dictionary,
+        CFSTR("DisplayHorizontalImageSize"),
+        &horizontalSize
+    );
 
     char displayLocation[AS_TEXT_CAPACITY] = {0};
-    if (stringFromDictionary(
-            dictionary,
-            CFSTR("IODisplayLocation"),
-            displayLocation,
-            sizeof(displayLocation)) &&
-        displayLocation[0] != '\0' &&
-        strcmp(displayLocation, service->ioDisplayLocation) == 0) {
-        score += 10;
-    }
+    (void)stringFromDictionary(
+        dictionary,
+        CFSTR("IODisplayLocation"),
+        displayLocation,
+        sizeof(displayLocation)
+    );
 
+    char displayName[AS_TEXT_CAPACITY] = {0};
     CFTypeRef nameList = CFDictionaryGetValue(dictionary, CFSTR("DisplayProductName"));
     if (nameList != NULL && CFGetTypeID(nameList) == CFDictionaryGetTypeID()) {
-        char displayName[AS_TEXT_CAPACITY] = {0};
         if (!stringFromDictionary(
                 (CFDictionaryRef)nameList,
                 CFSTR("en_US"),
@@ -434,21 +513,72 @@ static int matchScore(CGDirectDisplayID displayID, const ASServiceInfo *service)
                 &context
             );
         }
-        if (displayName[0] != '\0' && strcasecmp(displayName, service->productName) == 0) {
-            score += 1;
-        }
     }
 
     int64_t displaySerial = 0;
-    if (valueFromDictionary(dictionary, CFSTR("DisplaySerialNumber"), &displaySerial) &&
-        displaySerial != 0 &&
-        service->serialNumber != 0 &&
-        displaySerial == service->serialNumber) {
-        score += 1;
-    }
+    (void)valueFromDictionary(dictionary, CFSTR("DisplaySerialNumber"), &displaySerial);
+
+    evidence = ASDDCScoreMatchEvidence(
+        displayLocation,
+        service->ioDisplayLocation,
+        displayName,
+        service->productName,
+        displaySerial,
+        service->serialNumber,
+        manufactureYear,
+        manufactureWeek,
+        vendorID,
+        productID,
+        horizontalSize,
+        verticalSize,
+        service->edidUUID
+    );
 
     CFRelease(dictionary);
-    return score;
+    return evidence;
+}
+
+ASDDCMatchConfidence ASDDCClassifyMatchConfidence(
+    bool locationMatch,
+    uint8_t independentSignalCount
+) {
+    if (locationMatch || independentSignalCount >= 3) {
+        return ASDDCMatchConfidenceHigh;
+    }
+    if (independentSignalCount > 0) {
+        return ASDDCMatchConfidenceLow;
+    }
+    return ASDDCMatchConfidenceNone;
+}
+
+ASDDCMatchConfidence ASDDCClassifyAssignedMatch(
+    ASDDCMatchEvidence selected,
+    const ASDDCMatchEvidence *displayAlternatives,
+    size_t displayAlternativeCount,
+    const ASDDCMatchEvidence *serviceAlternatives,
+    size_t serviceAlternativeCount
+) {
+    ASDDCMatchConfidence confidence = ASDDCClassifyMatchConfidence(
+        selected.locationMatch,
+        selected.independentSignalCount
+    );
+    if (confidence != ASDDCMatchConfidenceHigh || selected.score <= 0) {
+        return confidence;
+    }
+
+    for (size_t index = 0; index < displayAlternativeCount; index += 1) {
+        if (displayAlternatives != NULL &&
+            displayAlternatives[index].score >= selected.score) {
+            return ASDDCMatchConfidenceLow;
+        }
+    }
+    for (size_t index = 0; index < serviceAlternativeCount; index += 1) {
+        if (serviceAlternatives != NULL &&
+            serviceAlternatives[index].score >= selected.score) {
+            return ASDDCMatchConfidenceLow;
+        }
+    }
+    return ASDDCMatchConfidenceHigh;
 }
 
 bool ASDisplayCopyProductName(
@@ -610,10 +740,11 @@ bool ASDDCParseVCPReply(
     return true;
 }
 
-size_t ASDDCServiceCreateForDisplays(
+size_t ASDDCServiceCreateForDisplaysWithConfidence(
     const CGDirectDisplayID *displayIDs,
     size_t displayCount,
     ASDDCServiceToken *tokens,
+    ASDDCMatchConfidence *confidences,
     size_t tokenCapacity
 ) {
     if (displayIDs == NULL || tokens == NULL || displayCount == 0 || tokenCapacity < displayCount ||
@@ -624,6 +755,9 @@ size_t ASDDCServiceCreateForDisplays(
 
     for (size_t index = 0; index < tokenCapacity; index += 1) {
         tokens[index] = 0;
+        if (confidences != NULL) {
+            confidences[index] = ASDDCMatchConfidenceNone;
+        }
     }
 
     ASServiceInfo *services = calloc(AS_MAX_SERVICE_COUNT, sizeof(ASServiceInfo));
@@ -641,6 +775,7 @@ size_t ASDDCServiceCreateForDisplays(
 
     while (matchedCount < displayCount) {
         int bestScore = 0;
+        ASDDCMatchEvidence bestEvidence = {0};
         size_t bestDisplay = 0;
         size_t bestService = 0;
         bool found = false;
@@ -653,9 +788,13 @@ size_t ASDDCServiceCreateForDisplays(
                 if (usedServices[serviceIndex]) {
                     continue;
                 }
-                int score = matchScore(displayIDs[displayIndex], &services[serviceIndex]);
-                if (score > bestScore) {
-                    bestScore = score;
+                ASDDCMatchEvidence evidence = matchEvidence(
+                    displayIDs[displayIndex],
+                    &services[serviceIndex]
+                );
+                if (evidence.score > bestScore) {
+                    bestScore = evidence.score;
+                    bestEvidence = evidence;
                     bestDisplay = displayIndex;
                     bestService = serviceIndex;
                     found = true;
@@ -667,6 +806,32 @@ size_t ASDDCServiceCreateForDisplays(
             break;
         }
 
+        ASDDCMatchEvidence displayAlternatives[AS_MAX_SERVICE_COUNT] = {0};
+        size_t displayAlternativeCount = 0;
+        for (size_t serviceIndex = 0; serviceIndex < serviceCount; serviceIndex += 1) {
+            if (serviceIndex == bestService || usedServices[serviceIndex]) {
+                continue;
+            }
+            displayAlternatives[displayAlternativeCount] = matchEvidence(
+                displayIDs[bestDisplay],
+                &services[serviceIndex]
+            );
+            displayAlternativeCount += 1;
+        }
+
+        ASDDCMatchEvidence serviceAlternatives[AS_MAX_SERVICE_COUNT] = {0};
+        size_t serviceAlternativeCount = 0;
+        for (size_t displayIndex = 0; displayIndex < displayCount; displayIndex += 1) {
+            if (displayIndex == bestDisplay || usedDisplays[displayIndex]) {
+                continue;
+            }
+            serviceAlternatives[serviceAlternativeCount] = matchEvidence(
+                displayIDs[displayIndex],
+                &services[bestService]
+            );
+            serviceAlternativeCount += 1;
+        }
+
         struct ASDDCServiceHandle *handle = calloc(1, sizeof(*handle));
         if (handle == NULL) {
             break;
@@ -674,6 +839,15 @@ size_t ASDDCServiceCreateForDisplays(
         handle->service = services[bestService].service;
         services[bestService].service = NULL;
         tokens[bestDisplay] = (ASDDCServiceToken)(uintptr_t)handle;
+        if (confidences != NULL) {
+            confidences[bestDisplay] = ASDDCClassifyAssignedMatch(
+                bestEvidence,
+                displayAlternatives,
+                displayAlternativeCount,
+                serviceAlternatives,
+                serviceAlternativeCount
+            );
+        }
         usedDisplays[bestDisplay] = true;
         usedServices[bestService] = true;
         matchedCount += 1;
@@ -684,6 +858,21 @@ size_t ASDDCServiceCreateForDisplays(
     free(usedDisplays);
     free(usedServices);
     return matchedCount;
+}
+
+size_t ASDDCServiceCreateForDisplays(
+    const CGDirectDisplayID *displayIDs,
+    size_t displayCount,
+    ASDDCServiceToken *tokens,
+    size_t tokenCapacity
+) {
+    return ASDDCServiceCreateForDisplaysWithConfidence(
+        displayIDs,
+        displayCount,
+        tokens,
+        NULL,
+        tokenCapacity
+    );
 }
 
 void ASDDCServiceDestroy(ASDDCServiceToken token) {

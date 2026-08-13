@@ -8,26 +8,38 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         let maximumSlider: NSSlider?
         let minimumValueLabel: NSTextField?
         let maximumValueLabel: NSTextField?
+        let assumedMaximumPopup: NSPopUpButton?
+        let assumedMaximumField: NSTextField?
+        let retryButton: NSButton?
 
         init(
             state: DisplayState,
             minimumSlider: NSSlider? = nil,
             maximumSlider: NSSlider? = nil,
             minimumValueLabel: NSTextField? = nil,
-            maximumValueLabel: NSTextField? = nil
+            maximumValueLabel: NSTextField? = nil,
+            assumedMaximumPopup: NSPopUpButton? = nil,
+            assumedMaximumField: NSTextField? = nil,
+            retryButton: NSButton? = nil
         ) {
             self.state = state
             self.minimumSlider = minimumSlider
             self.maximumSlider = maximumSlider
             self.minimumValueLabel = minimumValueLabel
             self.maximumValueLabel = maximumValueLabel
+            self.assumedMaximumPopup = assumedMaximumPopup
+            self.assumedMaximumField = assumedMaximumField
+            self.retryButton = retryButton
         }
     }
 
     private let settings: SettingsStore
+    private let brightnessSyncForcedOff: Bool
     private let onBrightnessSyncChanged: () -> Void
     private let onAppearanceThresholdsChanged: (AppearanceThresholds) -> Void
     private let onDisplayRangeChanged: () -> Void
+    private let onAssumedMaximumChanged: (DisplayIdentity, UInt16) -> Void
+    private let onRetryDisplay: (DisplayTargetKey) -> Void
     private let onLaunchAtLoginChanged: (Bool) -> Void
     private let onMenuBarIconVisibilityChanged: (Bool) -> Void
 
@@ -56,12 +68,18 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         onAppearanceThresholdsChanged: @escaping (AppearanceThresholds) -> Void,
         onDisplayRangeChanged: @escaping () -> Void,
         onLaunchAtLoginChanged: @escaping (Bool) -> Void,
-        onMenuBarIconVisibilityChanged: @escaping (Bool) -> Void
+        onMenuBarIconVisibilityChanged: @escaping (Bool) -> Void,
+        onAssumedMaximumChanged: @escaping (DisplayIdentity, UInt16) -> Void = { _, _ in },
+        onRetryDisplay: @escaping (DisplayTargetKey) -> Void = { _ in },
+        brightnessSyncForcedOff: Bool = false
     ) {
         self.settings = settings
+        self.brightnessSyncForcedOff = brightnessSyncForcedOff
         self.onBrightnessSyncChanged = onBrightnessSyncChanged
         self.onAppearanceThresholdsChanged = onAppearanceThresholdsChanged
         self.onDisplayRangeChanged = onDisplayRangeChanged
+        self.onAssumedMaximumChanged = onAssumedMaximumChanged
+        self.onRetryDisplay = onRetryDisplay
         self.onLaunchAtLoginChanged = onLaunchAtLoginChanged
         self.onMenuBarIconVisibilityChanged = onMenuBarIconVisibilityChanged
         super.init(window: nil)
@@ -255,7 +273,10 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
     }
 
     private func makeDisplayRow(_ state: DisplayState) -> DisplayRow {
-        guard state.support == .controllableExternal else {
+        guard state.support.isExternal,
+              state.support != .unsupportedExternal,
+              let capability = state.capability
+        else {
             return DisplayRow(state: state)
         }
 
@@ -271,12 +292,44 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         minimumLabel.stringValue = percentageText(range.minimum)
         maximumLabel.stringValue = percentageText(range.maximum)
 
+        var assumedMaximumPopup: NSPopUpButton?
+        var assumedMaximumField: NSTextField?
+        if capability.isWriteOnly {
+            let maximum = settings.assumedMaximum(for: state.record.identity)
+            let popup = makeAssumedMaximumPopup(maximum: maximum)
+            let field = NSTextField(string: String(maximum))
+            field.isEditable = true
+            field.isSelectable = true
+            field.alignment = .right
+            field.widthAnchor.constraint(equalToConstant: 82).isActive = true
+            field.setAccessibilityLabel("Assumed maximum VCP value for \(state.record.name)")
+            field.target = self
+            field.action = #selector(assumedMaximumFieldChanged(_:))
+            assumedMaximumPopup = popup
+            assumedMaximumField = field
+        }
+
+        var retryButton: NSButton?
+        if state.support.isDegraded {
+            let button = NSButton(
+                title: "Retry",
+                target: self,
+                action: #selector(retryDisplay(_:))
+            )
+            button.bezelStyle = .rounded
+            button.setAccessibilityLabel("Retry brightness control for \(state.record.name)")
+            retryButton = button
+        }
+
         return DisplayRow(
             state: state,
             minimumSlider: minimumSlider,
             maximumSlider: maximumSlider,
             minimumValueLabel: minimumLabel,
-            maximumValueLabel: maximumLabel
+            maximumValueLabel: maximumLabel,
+            assumedMaximumPopup: assumedMaximumPopup,
+            assumedMaximumField: assumedMaximumField,
+            retryButton: retryButton
         )
     }
 
@@ -291,16 +344,11 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         stack.addArrangedSubview(title)
 
         let statusText: String
-        switch row.state.support {
-        case .builtIn:
-            statusText = "Built-in display"
-        case .controllableExternal:
-            statusText = "External display · brightness controllable"
-        case .unsupportedExternal:
-            statusText = "External display · unsupported for brightness control"
-        }
+        statusText = row.state.support.userFacingLabel
         let status = label(statusText, wrapping: true)
-        status.textColor = row.state.support == .unsupportedExternal ? .secondaryLabelColor : .labelColor
+        status.textColor = row.state.support == .unsupportedExternal
+            ? .secondaryLabelColor
+            : (row.state.support.isDegraded ? .systemOrange : .labelColor)
         stack.addArrangedSubview(status)
 
         guard let minimumSlider = row.minimumSlider,
@@ -327,12 +375,37 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
                 accessibilityLabel: "Maximum brightness for \(row.state.record.name)"
             )
         )
+
+        if let popup = row.assumedMaximumPopup,
+           let field = row.assumedMaximumField {
+            let assumedTitle = label("Assumed maximum")
+            assumedTitle.widthAnchor.constraint(equalToConstant: 125).isActive = true
+            let assumedRow = NSStackView(views: [assumedTitle, popup, field])
+            assumedRow.orientation = .horizontal
+            assumedRow.alignment = .centerY
+            assumedRow.spacing = 8
+            stack.addArrangedSubview(assumedRow)
+            stack.addArrangedSubview(
+                label(
+                    "Used for write-only VCP scaling; hardware maximum is unverified.",
+                    wrapping: true
+                )
+            )
+        }
+
+        if let retryButton = row.retryButton {
+            stack.addArrangedSubview(retryButton)
+        }
         return stack
     }
 
     private func refreshControls() {
         guard contentStack != nil else { return }
-        brightnessSyncCheckbox?.state = settings.brightnessSyncEnabled ? .on : .off
+        brightnessSyncCheckbox?.state = brightnessSyncForcedOff || settings.brightnessSyncEnabled ? .on : .off
+        if brightnessSyncForcedOff {
+            brightnessSyncCheckbox?.state = .off
+            brightnessSyncCheckbox?.isEnabled = false
+        }
         let thresholds = settings.appearanceThresholds
         darkThresholdSlider?.doubleValue = thresholds.dark * 100.0
         lightThresholdSlider?.doubleValue = thresholds.light * 100.0
@@ -367,6 +440,28 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         slider.translatesAutoresizingMaskIntoConstraints = false
         slider.widthAnchor.constraint(equalToConstant: 220).isActive = true
         return slider
+    }
+
+    private func makeAssumedMaximumPopup(maximum: UInt16) -> NSPopUpButton {
+        let popup = NSPopUpButton(frame: .zero, pullsDown: false)
+        popup.addItem(withTitle: "100")
+        popup.addItem(withTitle: "255")
+        popup.addItem(withTitle: "Custom")
+        popup.item(at: 0)?.representedObject = NSNumber(value: 100)
+        popup.item(at: 1)?.representedObject = NSNumber(value: 255)
+        popup.item(at: 2)?.representedObject = NSNumber(value: maximum)
+        popup.widthAnchor.constraint(equalToConstant: 100).isActive = true
+        popup.setAccessibilityLabel("Assumed maximum preset")
+        popup.target = self
+        popup.action = #selector(assumedMaximumPresetChanged(_:))
+        if maximum == 100 {
+            popup.selectItem(at: 0)
+        } else if maximum == 255 {
+            popup.selectItem(at: 1)
+        } else {
+            popup.selectItem(at: 2)
+        }
+        return popup
     }
 
     private func sliderRow(
@@ -409,6 +504,10 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
     }
 
     @objc private func brightnessSyncChanged(_ sender: NSButton) {
+        guard !brightnessSyncForcedOff else {
+            sender.state = .off
+            return
+        }
         settings.brightnessSyncEnabled = sender.state == .on
         onBrightnessSyncChanged()
     }
@@ -451,6 +550,47 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         minimumLabel.stringValue = percentageText(normalized.minimum)
         maximumLabel.stringValue = percentageText(normalized.maximum)
         onDisplayRangeChanged()
+    }
+
+    @objc private func assumedMaximumPresetChanged(_ sender: NSPopUpButton) {
+        guard let row = displayRows.first(where: { $0.assumedMaximumPopup === sender }),
+              let item = sender.selectedItem,
+              let represented = item.representedObject as? NSNumber
+        else {
+            return
+        }
+
+        let maximum = settings.setAssumedMaximum(
+            represented.intValue,
+            for: row.state.record.identity
+        )
+        row.assumedMaximumField?.stringValue = String(maximum)
+        onAssumedMaximumChanged(row.state.record.identity, maximum)
+    }
+
+    @objc private func assumedMaximumFieldChanged(_ sender: NSTextField) {
+        guard let row = displayRows.first(where: { $0.assumedMaximumField === sender }) else {
+            return
+        }
+        let maximum = settings.setAssumedMaximum(
+            sender.integerValue,
+            for: row.state.record.identity
+        )
+        sender.stringValue = String(maximum)
+        row.assumedMaximumPopup?.selectItem(at: 2)
+        onAssumedMaximumChanged(row.state.record.identity, maximum)
+    }
+
+    @objc private func retryDisplay(_ sender: NSButton) {
+        guard let row = displayRows.first(where: { $0.retryButton === sender }) else {
+            return
+        }
+        onRetryDisplay(
+            DisplayTargetKey(
+                identity: row.state.record.identity,
+                displayID: row.state.record.displayID
+            )
+        )
     }
 
     @objc private func launchAtLoginChanged(_ sender: NSButton) {

@@ -17,6 +17,7 @@ extension UserDefaults: DefaultsProviding {}
 /// - dark threshold 0.25
 /// - light threshold 0.40
 /// - each display range 0.0...1.0
+/// - each write-only display assumed DDC maximum 100
 /// `SettingsStore` is shared across actor boundaries by explicit lock
 /// confinement. The lock serializes every `UserDefaults` access, including
 /// test doubles supplied through `DefaultsProviding`.
@@ -26,6 +27,9 @@ public final class SettingsStore: @unchecked Sendable {
     public static let launchAtLoginEnabledKey = "launchAtLoginEnabled"
     public static let darkThresholdKey = "appearance.darkThreshold"
     public static let lightThresholdKey = "appearance.lightThreshold"
+    public static let defaultAssumedMaximum: UInt16 = 100
+    public static let minimumAssumedMaximum: UInt16 = 1
+    public static let maximumAssumedMaximum: UInt16 = UInt16.max
 
     private let defaults: any DefaultsProviding
     private let lock = NSLock()
@@ -116,6 +120,37 @@ public final class SettingsStore: @unchecked Sendable {
         }
     }
 
+    public func assumedMaximum(for identity: DisplayIdentity) -> UInt16 {
+        withLock {
+            let stored = integerUnlocked(forKey: identity.assumedMaximumSettingsKey)
+            let normalized = Self.clampAssumedMaximum(
+                stored ?? Int(Self.defaultAssumedMaximum)
+            )
+            if stored != Int(normalized) {
+                defaults.set(Int(normalized), forKey: identity.assumedMaximumSettingsKey)
+            }
+            return normalized
+        }
+    }
+
+    @discardableResult
+    public func setAssumedMaximum(_ maximum: Int, for identity: DisplayIdentity) -> UInt16 {
+        withLock {
+            let normalized = Self.clampAssumedMaximum(maximum)
+            defaults.set(Int(normalized), forKey: identity.assumedMaximumSettingsKey)
+            return normalized
+        }
+    }
+
+    public static func clampAssumedMaximum(_ maximum: Int) -> UInt16 {
+        UInt16(
+            min(
+                max(maximum, Int(minimumAssumedMaximum)),
+                Int(maximumAssumedMaximum)
+            )
+        )
+    }
+
     private func boolUnlocked(forKey key: String, fallback: Bool) -> Bool {
         guard let value = defaults.object(forKey: key) else { return fallback }
         if let number = value as? NSNumber { return number.boolValue }
@@ -130,6 +165,17 @@ public final class SettingsStore: @unchecked Sendable {
             return result.isFinite ? result : nil
         }
         if let double = value as? Double, double.isFinite { return double }
+        return nil
+    }
+
+    private func integerUnlocked(forKey key: String) -> Int? {
+        guard let value = defaults.object(forKey: key) else { return nil }
+        if let number = value as? NSNumber {
+            return number.intValue
+        }
+        if let integer = value as? Int {
+            return integer
+        }
         return nil
     }
 

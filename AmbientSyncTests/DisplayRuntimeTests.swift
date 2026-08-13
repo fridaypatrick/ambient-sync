@@ -21,7 +21,11 @@ final class DisplayRuntimeTests: XCTestCase {
 
     func testDDCRawValueScalesUsingCapabilityMaximum() {
         XCTAssertEqual(ddcRawVCPValue(forPercent: 50, maximum: 100), 50)
+        XCTAssertEqual(ddcRawVCPValue(forPercent: 100, maximum: 100), 100)
+        XCTAssertEqual(ddcRawVCPValue(forPercent: 0, maximum: 255), 0)
         XCTAssertEqual(ddcRawVCPValue(forPercent: 50, maximum: 254), 127)
+        XCTAssertEqual(ddcRawVCPValue(forPercent: 50, maximum: 255), 128)
+        XCTAssertEqual(ddcRawVCPValue(forPercent: 100, maximum: 255), 255)
         XCTAssertEqual(ddcRawVCPValue(forPercent: 100, maximum: 254), 254)
     }
 
@@ -322,6 +326,336 @@ final class DisplayRuntimeTests: XCTestCase {
         await manager.stop()
     }
 
+    func testThreeConsecutiveWriteFailuresPauseWithoutFourthAndRetryReenablesOnMeaningfulEvent() async {
+        let builtIn = makeDisplay(id: 1, builtIn: true)
+        let external = makeDisplay(id: 2, builtIn: false)
+        let sink = ConfigurableSink(outcomes: [false, false, false, true])
+        let manager = await makeManager(
+            records: [builtIn, external],
+            bindings: [ExternalDisplayBinding(record: external, sink: sink)]
+        )
+        let settings = makeSettings()
+        settings.store.setRange(
+            DisplayBrightnessRange(minimum: 0.50, maximum: 0.50),
+            for: external.identity
+        )
+        let source = SequenceBrightnessSource(values: [0.50, 0.5201, 0.5401, 0.5601, 0.5901])
+        let controller = BrightnessSyncController(
+            displayRuntime: manager,
+            brightnessSource: source,
+            settings: settings.store
+        )
+
+        _ = await controller.pollOnce()
+        _ = await controller.pollOnce()
+        _ = await controller.pollOnce()
+        _ = await controller.pollOnce()
+        let attemptsBeforeRetry = await sink.attemptedWrites()
+        XCTAssertEqual(attemptsBeforeRetry, [50, 50, 50])
+
+        let key = DisplayTargetKey(identity: external.identity, displayID: external.displayID)
+        var state = await manager.runtimeState()
+        XCTAssertEqual(state.snapshot.displays.first(where: { $0.record == external })?.support, .degradedExternal)
+
+        await controller.retryTarget(key)
+        state = await manager.runtimeState()
+        XCTAssertEqual(state.snapshot.displays.first(where: { $0.record == external })?.support, .verifiedExternal)
+        let attemptsAfterRetry = await sink.attemptedWrites()
+        XCTAssertEqual(attemptsAfterRetry, [50, 50, 50])
+
+        _ = await controller.pollOnce()
+        let attemptsAfterMeaningfulEvent = await sink.attemptedWrites()
+        let successfulAfterRetry = await sink.successfulWrites()
+        XCTAssertEqual(attemptsAfterMeaningfulEvent, [50, 50, 50, 50])
+        XCTAssertEqual(successfulAfterRetry, [50])
+        await manager.stop()
+    }
+
+    func testWriteCutoffPersistsAcrossDisableMissingBuiltInAndControllerRestart() async throws {
+        let builtIn = makeDisplay(id: 1, builtIn: true)
+        let external = makeDisplay(id: 2, builtIn: false)
+        let sink = ConfigurableSink(outcomes: [false, false, false, true])
+        let runtime = MutableRuntimeProvider(builtIn: builtIn, external: external, sink: sink)
+        let settings = makeSettings()
+        settings.store.setRange(
+            DisplayBrightnessRange(minimum: 0.50, maximum: 0.50),
+            for: external.identity
+        )
+        let source = SequenceBrightnessSource(
+            values: [0.50, 0.5201, 0.5401, 0.5601, 0.5801, 0.6001, 0.6201]
+        )
+        let controller = BrightnessSyncController(
+            displayRuntime: runtime,
+            brightnessSource: source,
+            settings: settings.store,
+            pollInterval: .seconds(3_600)
+        )
+        let key = DisplayTargetKey(identity: external.identity, displayID: external.displayID)
+
+        _ = await controller.pollOnce()
+        _ = await controller.pollOnce()
+        _ = await controller.pollOnce()
+        let attemptsAfterCutoff = await sink.attemptedWrites()
+        XCTAssertEqual(attemptsAfterCutoff, [50, 50, 50])
+        let degradedAfterCutoff = await runtime.isDegraded()
+        XCTAssertTrue(degradedAfterCutoff)
+
+        settings.store.brightnessSyncEnabled = false
+        await controller.settingsDidChange()
+        let didPollWhileDisabled = await controller.pollOnce()
+        XCTAssertFalse(didPollWhileDisabled)
+        settings.store.brightnessSyncEnabled = true
+        await controller.settingsDidChange()
+        _ = await controller.pollOnce()
+        let attemptsAfterReenable = await sink.attemptedWrites()
+        XCTAssertEqual(attemptsAfterReenable, [50, 50, 50])
+
+        await runtime.setBuiltIn(nil)
+        let didPollWithoutBuiltIn = await controller.pollOnce()
+        XCTAssertFalse(didPollWithoutBuiltIn)
+        await runtime.setBuiltIn(builtIn)
+        _ = await controller.pollOnce()
+        let attemptsAfterBuiltInReturn = await sink.attemptedWrites()
+        XCTAssertEqual(attemptsAfterBuiltInReturn, [50, 50, 50])
+
+        await controller.start()
+        try await Task.sleep(for: .milliseconds(20))
+        await controller.stop()
+        let attemptsAfterRestart = await sink.attemptedWrites()
+        XCTAssertEqual(attemptsAfterRestart, [50, 50, 50])
+
+        await controller.retryTarget(key)
+        _ = await controller.pollOnce()
+        let attemptsAfterRetry = await sink.attemptedWrites()
+        XCTAssertEqual(attemptsAfterRetry, [50, 50, 50, 50])
+        let degradedAfterRetry = await runtime.isDegraded()
+        XCTAssertFalse(degradedAfterRetry)
+    }
+
+    func testStaleFailureAfterRefreshDoesNotDegradeNewWriteOnlyTarget() async {
+        let builtIn = makeDisplay(id: 1, builtIn: true)
+        let external = makeDisplay(id: 2, builtIn: false)
+        let writeGate = WriteGate()
+        let staleSink = BlockingWriteSink(gate: writeGate)
+        let freshSink = RecordingSink()
+        let provider = TestTransportProvider(
+            bindings: [
+                ExternalDisplayBinding(
+                    record: external,
+                    sink: staleSink,
+                    capability: .writeOnlyAssumed(maximum: 100)
+                )
+            ]
+        )
+        let manager = DisplayManager(
+            enumerator: TestDisplayEnumerator(records: [builtIn, external]),
+            externalProvider: provider,
+            lifecycleNotificationCenter: NotificationCenter()
+        )
+        await manager.start()
+
+        let settings = makeSettings()
+        settings.store.setRange(
+            DisplayBrightnessRange(minimum: 0.50, maximum: 0.50),
+            for: external.identity
+        )
+        let source = SequenceBrightnessSource(values: [0.50, 0.5201])
+        let controller = BrightnessSyncController(
+            displayRuntime: manager,
+            brightnessSource: source,
+            settings: settings.store
+        )
+
+        let stalePoll = Task { await controller.pollOnce() }
+        await writeGate.waitUntilStarted()
+
+        await provider.setBindings([
+            ExternalDisplayBinding(
+                record: external,
+                sink: freshSink,
+                capability: .writeOnlyAssumed(maximum: 100)
+            )
+        ])
+        await manager.refreshNow()
+        let refreshedState = await manager.runtimeState()
+        XCTAssertEqual(refreshedState.snapshot.generation, 2)
+        XCTAssertEqual(
+            refreshedState.snapshot.displays.first(where: { $0.record == external })?.support,
+            .writeOnlyExternal
+        )
+
+        await writeGate.release(result: false)
+        let stalePollResult = await stalePoll.value
+        XCTAssertTrue(stalePollResult)
+
+        let stateAfterStaleFailure = await manager.runtimeState()
+        XCTAssertEqual(
+            stateAfterStaleFailure.snapshot.displays.first(where: { $0.record == external })?.support,
+            .writeOnlyExternal
+        )
+        let freshWritesBeforeNextPoll = await freshSink.writes()
+        XCTAssertEqual(freshWritesBeforeNextPoll, [])
+
+        _ = await controller.pollOnce()
+        let freshWritesAfterNextPoll = await freshSink.writes()
+        XCTAssertEqual(freshWritesAfterNextPoll, [50])
+        await manager.stop()
+    }
+
+    func testStaleSuccessAfterRefreshDoesNotClearNewTargetDegradedStatus() async {
+        let builtIn = makeDisplay(id: 1, builtIn: true)
+        let external = makeDisplay(id: 2, builtIn: false)
+        let writeGate = WriteGate()
+        let staleSink = BlockingWriteSink(gate: writeGate)
+        let freshSink = RecordingSink()
+        let provider = TestTransportProvider(
+            bindings: [
+                ExternalDisplayBinding(
+                    record: external,
+                    sink: staleSink,
+                    capability: .writeOnlyAssumed(maximum: 100)
+                )
+            ]
+        )
+        let manager = DisplayManager(
+            enumerator: TestDisplayEnumerator(records: [builtIn, external]),
+            externalProvider: provider,
+            lifecycleNotificationCenter: NotificationCenter()
+        )
+        await manager.start()
+
+        let settings = makeSettings()
+        settings.store.setRange(
+            DisplayBrightnessRange(minimum: 0.50, maximum: 0.50),
+            for: external.identity
+        )
+        let source = SequenceBrightnessSource(values: [0.50])
+        let controller = BrightnessSyncController(
+            displayRuntime: manager,
+            brightnessSource: source,
+            settings: settings.store
+        )
+
+        let stalePoll = Task { await controller.pollOnce() }
+        await writeGate.waitUntilStarted()
+        await provider.setBindings([
+            ExternalDisplayBinding(
+                record: external,
+                sink: freshSink,
+                capability: .writeOnlyAssumed(maximum: 100)
+            )
+        ])
+        await manager.refreshNow()
+        let refreshedState = await manager.runtimeState()
+        guard let freshTarget = refreshedState.externalTargets.first else {
+            XCTFail("Expected refreshed external target")
+            return
+        }
+        await manager.markTargetDegraded(
+            freshTarget.key,
+            generation: freshTarget.generation
+        )
+
+        await writeGate.release(result: true)
+        let stalePollResult = await stalePoll.value
+        XCTAssertTrue(stalePollResult)
+
+        let stateAfterStaleSuccess = await manager.runtimeState()
+        XCTAssertEqual(
+            stateAfterStaleSuccess.snapshot.displays.first(where: { $0.record == external })?.support,
+            .degradedWriteOnlyExternal
+        )
+        await manager.stop()
+    }
+
+    func testRuntimeGenerationChangeClearsWriteCutoffAndAllowsWrite() async {
+        let builtIn = makeDisplay(id: 1, builtIn: true)
+        let external = makeDisplay(id: 2, builtIn: false)
+        let sink = ConfigurableSink(outcomes: [false, false, false, true])
+        let runtime = MutableRuntimeProvider(builtIn: builtIn, external: external, sink: sink)
+        let settings = makeSettings()
+        settings.store.setRange(
+            DisplayBrightnessRange(minimum: 0.50, maximum: 0.50),
+            for: external.identity
+        )
+        let source = SequenceBrightnessSource(values: [0.50, 0.5201, 0.5401, 0.5601])
+        let controller = BrightnessSyncController(
+            displayRuntime: runtime,
+            brightnessSource: source,
+            settings: settings.store
+        )
+
+        _ = await controller.pollOnce()
+        _ = await controller.pollOnce()
+        _ = await controller.pollOnce()
+        let degradedBeforeGenerationChange = await runtime.isDegraded()
+        XCTAssertTrue(degradedBeforeGenerationChange)
+
+        await runtime.setGeneration(2)
+        _ = await controller.pollOnce()
+
+        let attemptsAfterGenerationChange = await sink.attemptedWrites()
+        XCTAssertEqual(attemptsAfterGenerationChange, [50, 50, 50, 50])
+        let degradedAfterGenerationChange = await runtime.isDegraded()
+        XCTAssertFalse(degradedAfterGenerationChange)
+    }
+
+    func testWriteOnlySnapshotCarriesCapabilityAndStatusWithoutRebuildWrites() async {
+        let builtIn = makeDisplay(id: 1, builtIn: true)
+        let external = makeDisplay(id: 2, builtIn: false)
+        let sink = RecordingSink()
+        let manager = await makeManager(
+            records: [builtIn, external],
+            bindings: [
+                ExternalDisplayBinding(
+                    record: external,
+                    sink: sink,
+                    capability: .writeOnlyAssumed(maximum: 255)
+                )
+            ]
+        )
+
+        let state = await manager.runtimeState()
+        let displayState = state.snapshot.displays.first(where: { $0.record == external })
+        XCTAssertEqual(displayState?.support, .writeOnlyExternal)
+        XCTAssertEqual(displayState?.capability, .writeOnlyAssumed(maximum: 255))
+        let writesDuringRebuild = await sink.writes()
+        XCTAssertEqual(writesDuringRebuild, [])
+        await manager.stop()
+    }
+
+    func testSuccessfulWriteResetsFailureCounterBeforeLaterFailures() async {
+        let builtIn = makeDisplay(id: 1, builtIn: true)
+        let external = makeDisplay(id: 2, builtIn: false)
+        let sink = ConfigurableSink(outcomes: [false, true, false, false, false])
+        let manager = await makeManager(
+            records: [builtIn, external],
+            bindings: [ExternalDisplayBinding(record: external, sink: sink)]
+        )
+        let source = SequenceBrightnessSource(values: [0.50, 0.5201, 0.5401, 0.5601, 0.5901])
+        let controller = BrightnessSyncController(
+            displayRuntime: manager,
+            brightnessSource: source,
+            settings: makeSettings().store
+        )
+
+        _ = await controller.pollOnce()
+        _ = await controller.pollOnce()
+        _ = await controller.pollOnce()
+        _ = await controller.pollOnce()
+        var state = await manager.runtimeState()
+        XCTAssertEqual(state.snapshot.displays.first(where: { $0.record == external })?.support, .verifiedExternal)
+        let successfulWritesBeforeFinalFailure = await sink.successfulWrites()
+        XCTAssertEqual(successfulWritesBeforeFinalFailure, [52])
+
+        _ = await controller.pollOnce()
+        state = await manager.runtimeState()
+        XCTAssertEqual(state.snapshot.displays.first(where: { $0.record == external })?.support, .degradedExternal)
+        let attempts = await sink.attemptedWrites()
+        XCTAssertEqual(attempts, [50, 52, 54, 56, 59])
+        await manager.stop()
+    }
+
     func testLifecycleDebounceInvalidatesAndRebuildsTransportHandles() async throws {
         let builtIn = makeDisplay(id: 1, builtIn: true)
         let external = makeDisplay(id: 2, builtIn: false)
@@ -351,6 +685,10 @@ final class DisplayRuntimeTests: XCTestCase {
         let rebuildCountAfterChange = await provider.rebuildCount()
         XCTAssertEqual(rebuildCountAfterChange, 2)
         XCTAssertEqual(state.externalTargets.count, 1)
+        let firstWritesAfterRebuild = await firstSink.writes()
+        let secondWritesAfterRebuild = await secondSink.writes()
+        XCTAssertEqual(firstWritesAfterRebuild, [])
+        XCTAssertEqual(secondWritesAfterRebuild, [])
         let secondSinkInvalidations = await secondSink.invalidateCount()
         XCTAssertEqual(secondSinkInvalidations, 0)
 
@@ -364,6 +702,8 @@ final class DisplayRuntimeTests: XCTestCase {
         try await Task.sleep(for: .milliseconds(40))
         state = await manager.runtimeState()
         XCTAssertEqual(state.externalTargets.count, 1)
+        let writesAfterWakeRebuild = await secondSink.writes()
+        XCTAssertEqual(writesAfterWakeRebuild, [])
         let rebuildCountAfterWake = await provider.rebuildCount()
         XCTAssertGreaterThanOrEqual(rebuildCountAfterWake, 3)
 
@@ -540,6 +880,87 @@ private actor TestDisplayEnumerator: DisplayEnumerator {
     }
 }
 
+private actor MutableRuntimeProvider: DisplayRuntimeProviding {
+    private var builtIn: DisplayRecord?
+    private let external: DisplayRecord
+    private let sink: any ExternalBrightnessSink
+    private var generation: UInt64 = 1
+    private var degraded = false
+
+    init(
+        builtIn: DisplayRecord?,
+        external: DisplayRecord,
+        sink: any ExternalBrightnessSink
+    ) {
+        self.builtIn = builtIn
+        self.external = external
+        self.sink = sink
+    }
+
+    func runtimeState() async -> DisplayRuntimeState {
+        let capability = ExternalDisplayCapability.verified(maximum: 100)
+        let support: DisplaySupportStatus = degraded ? .degradedExternal : .verifiedExternal
+        let state = DisplaySnapshot(
+            generation: generation,
+            displays: [
+                builtIn.map { DisplayState(record: $0, support: .builtIn) },
+                DisplayState(record: external, support: support, capability: capability)
+            ].compactMap { $0 },
+            builtIn: builtIn
+        )
+        return DisplayRuntimeState(
+            snapshot: state,
+            externalTargets: [
+                ExternalDisplayTarget(
+                    record: external,
+                    sink: sink,
+                    capability: capability,
+                    generation: generation
+                )
+            ]
+        )
+    }
+
+    func markTargetDegraded(_ key: DisplayTargetKey, generation: UInt64) async {
+        if key.displayID == external.displayID &&
+            key.identity == external.identity &&
+            generation == self.generation {
+            degraded = true
+        }
+    }
+
+    func markTargetHealthy(_ key: DisplayTargetKey, generation: UInt64) async {
+        if key.displayID == external.displayID &&
+            key.identity == external.identity &&
+            generation == self.generation {
+            degraded = false
+        }
+    }
+
+    func retryTarget(_ key: DisplayTargetKey, generation: UInt64?) async {
+        guard generation == nil || generation == self.generation else { return }
+        degraded = false
+    }
+
+    func updateAssumedMaximum(_ maximum: UInt16, for identity: DisplayIdentity) async {
+        _ = maximum
+        _ = identity
+    }
+
+    func setBuiltIn(_ builtIn: DisplayRecord?) {
+        self.builtIn = builtIn
+    }
+
+    func setGeneration(_ generation: UInt64) {
+        self.generation = generation
+        degraded = false
+    }
+
+    func isDegraded() -> Bool {
+        degraded
+    }
+}
+
 private actor TestTransportProvider: ExternalDisplayTransportProvider {
     private var bindings: [ExternalDisplayBinding]
     private var rebuilds = 0
@@ -612,6 +1033,59 @@ private actor RefreshGate {
         releaseContinuation?.resume()
         releaseContinuation = nil
     }
+}
+
+private actor WriteGate {
+    private var started = false
+    private var released = false
+    private var result = false
+    private var startWaiters: [CheckedContinuation<Void, Never>] = []
+    private var releaseContinuation: CheckedContinuation<Bool, Never>?
+
+    func waitUntilStarted() async {
+        guard !started else { return }
+        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+            startWaiters.append(continuation)
+        }
+    }
+
+    func waitUntilReleased() async -> Bool {
+        started = true
+        let waiters = startWaiters
+        startWaiters.removeAll()
+        for waiter in waiters {
+            waiter.resume()
+        }
+
+        if released {
+            return result
+        }
+        return await withCheckedContinuation { (continuation: CheckedContinuation<Bool, Never>) in
+            releaseContinuation = continuation
+        }
+    }
+
+    func release(result: Bool) {
+        self.result = result
+        released = true
+        releaseContinuation?.resume(returning: result)
+        releaseContinuation = nil
+    }
+}
+
+private actor BlockingWriteSink: ExternalBrightnessSink {
+    private let gate: WriteGate
+
+    init(gate: WriteGate) {
+        self.gate = gate
+    }
+
+    func writeBrightness(_ percent: Int) async -> Bool {
+        _ = percent
+        return await gate.waitUntilReleased()
+    }
+
+    func invalidate() async {}
 }
 
 private actor BlockingTransportProvider: ExternalDisplayTransportProvider {
@@ -729,6 +1203,30 @@ private actor FailingThenRecordingSink: ExternalBrightnessSink {
     func successfulWrites() -> [Int] {
         successful
     }
+}
+
+private actor ConfigurableSink: ExternalBrightnessSink {
+    private var outcomes: [Bool]
+    private var attempted: [Int] = []
+    private var successful: [Int] = []
+
+    init(outcomes: [Bool]) {
+        self.outcomes = outcomes
+    }
+
+    func writeBrightness(_ percent: Int) async -> Bool {
+        attempted.append(percent)
+        let result = outcomes.isEmpty ? true : outcomes.removeFirst()
+        if result {
+            successful.append(percent)
+        }
+        return result
+    }
+
+    func invalidate() async {}
+
+    func attemptedWrites() -> [Int] { attempted }
+    func successfulWrites() -> [Int] { successful }
 }
 
 private actor SequenceBrightnessSource: BuiltInBrightnessSource {

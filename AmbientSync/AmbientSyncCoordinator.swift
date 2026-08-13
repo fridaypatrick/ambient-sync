@@ -19,7 +19,7 @@ final class AmbientSyncCoordinator {
     init(safeSmoke: Bool = false) {
         self.safeSmoke = safeSmoke
         let settings = SettingsStore()
-        let displayManager = DisplayManager()
+        let displayManager = DisplayManager(settings: settings)
         let appearanceController = AppearanceAutomationController(
             adapter: SystemEventsAppearanceAdapter(),
             thresholds: settings.appearanceThresholds
@@ -51,7 +51,20 @@ final class AmbientSyncCoordinator {
             },
             onMenuBarIconVisibilityChanged: { [weak menuBarController] visible in
                 menuBarController?.setVisible(visible)
-            }
+            },
+            onAssumedMaximumChanged: { [weak displayManager, weak brightnessController] identity, maximum in
+                Task {
+                    await displayManager?.updateAssumedMaximum(maximum, for: identity)
+                    await brightnessController?.settingsDidChange()
+                }
+            },
+            onRetryDisplay: { [weak displayManager, weak brightnessController] key in
+                Task {
+                    await brightnessController?.retryTarget(key)
+                    await displayManager?.retryTarget(key)
+                }
+            },
+            brightnessSyncForcedOff: safeSmoke
         )
 
         self.settings = settings
@@ -88,11 +101,6 @@ final class AmbientSyncCoordinator {
         started = true
         NSApp.setActivationPolicy(.accessory)
 
-        if safeSmoke {
-            showSettings()
-            return
-        }
-
         runtimeTask = Task { [weak self] in
             guard let self else { return }
 
@@ -105,6 +113,11 @@ final class AmbientSyncCoordinator {
 
             let runtimeState = await self.displayManager.runtimeState()
             self.settingsWindowController.update(snapshot: runtimeState.snapshot)
+
+            if self.safeSmoke {
+                self.showSettings()
+                return
+            }
 
             guard !Task.isCancelled, !self.shutdownRequested else {
                 await self.displayManager.stop()

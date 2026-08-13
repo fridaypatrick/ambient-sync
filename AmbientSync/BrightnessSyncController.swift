@@ -13,6 +13,7 @@ public actor BrightnessSyncController {
     private var pollTask: Task<Void, Never>?
     private var changeFilter = MeaningfulBrightnessChangeFilter()
     private var targetSuppressors: [DisplayTargetKey: IntegerDDCTargetSuppressor] = [:]
+    private var consecutiveWriteFailures: [DisplayTargetKey: Int] = [:]
     private var lastRuntimeGeneration: UInt64?
 
     public init(
@@ -39,7 +40,7 @@ public actor BrightnessSyncController {
     public func stop() {
         pollTask?.cancel()
         pollTask = nil
-        resetState()
+        resetTransientState()
     }
 
     /// Called after global or per-display settings changes. Ranges take effect
@@ -47,10 +48,18 @@ public actor BrightnessSyncController {
     /// by a settings edit.
     public func settingsDidChange() {
         targetSuppressors.removeAll()
-        if !settings.brightnessSyncEnabled {
-            changeFilter.reset()
-            lastRuntimeGeneration = nil
+    }
+
+    /// Clears one target's transport fault. This changes no hardware state;
+    /// the next meaningful internal-brightness event may write again.
+    public func retryTarget(_ key: DisplayTargetKey) async {
+        let runtimeState = await displayRuntime.runtimeState()
+        guard let target = runtimeState.externalTargets.first(where: { $0.key == key }) else {
+            return
         }
+        consecutiveWriteFailures.removeValue(forKey: key)
+        targetSuppressors.removeValue(forKey: key)
+        await displayRuntime.retryTarget(key, generation: target.generation)
     }
 
     /// Exposed as a narrow coordinator seam for deterministic tests and later
@@ -58,13 +67,13 @@ public actor BrightnessSyncController {
     @discardableResult
     public func pollOnce() async -> Bool {
         guard settings.brightnessSyncEnabled else {
-            resetState()
+            resetTransientState()
             return false
         }
 
         let runtimeState = await displayRuntime.runtimeState()
         guard let builtIn = runtimeState.snapshot.builtIn else {
-            resetState()
+            resetTransientState()
             return false
         }
 
@@ -72,6 +81,7 @@ public actor BrightnessSyncController {
             lastRuntimeGeneration = runtimeState.snapshot.generation
             changeFilter.reset()
             targetSuppressors.removeAll()
+            consecutiveWriteFailures.removeAll()
         }
 
         guard let brightness = await brightnessSource.readBrightness(for: builtIn.displayID),
@@ -88,14 +98,40 @@ public actor BrightnessSyncController {
         targetSuppressors = targetSuppressors.filter { currentKeys.contains($0.key) }
 
         for target in runtimeState.externalTargets {
+            let isDegraded = runtimeState.snapshot.displays.contains {
+                $0.record.displayID == target.key.displayID &&
+                $0.record.identity == target.key.identity &&
+                $0.support.isDegraded
+            }
+            guard !isDegraded else { continue }
             var suppressor = targetSuppressors[target.key] ?? IntegerDDCTargetSuppressor()
+            let previousTarget = suppressor.lastTarget
             if let targetValue = suppressor.targetIfChanged(
                 for: brightness,
                 range: settings.range(for: target.record.identity)
             ) {
                 let didWrite = await target.sink.writeBrightness(targetValue)
-                guard didWrite else {
+                guard await isCurrent(target, in: runtimeState) else {
                     continue
+                }
+                if didWrite {
+                    consecutiveWriteFailures.removeValue(forKey: target.key)
+                    await displayRuntime.markTargetHealthy(
+                        target.key,
+                        generation: target.generation
+                    )
+                } else {
+                    let failures = (consecutiveWriteFailures[target.key] ?? 0) + 1
+                    consecutiveWriteFailures[target.key] = failures
+                    // Preserve rollback-on-failure: retry this target value on
+                    // a later meaningful event until the cutoff is reached.
+                    suppressor.rollback(to: previousTarget)
+                    if failures >= 3 {
+                        await displayRuntime.markTargetDegraded(
+                            target.key,
+                            generation: target.generation
+                        )
+                    }
                 }
             }
             targetSuppressors[target.key] = suppressor
@@ -105,6 +141,20 @@ public actor BrightnessSyncController {
             await onMeaningfulBrightness(brightness)
         }
         return true
+    }
+
+    private func isCurrent(
+        _ attemptedTarget: ExternalDisplayTarget,
+        in attemptedState: DisplayRuntimeState
+    ) async -> Bool {
+        let currentState = await displayRuntime.runtimeState()
+        guard currentState.snapshot.generation == attemptedState.snapshot.generation else {
+            return false
+        }
+        return currentState.externalTargets.contains {
+            $0.key == attemptedTarget.key &&
+            $0.generation == attemptedTarget.generation
+        }
     }
 
     private func pollLoop() async {
@@ -118,10 +168,9 @@ public actor BrightnessSyncController {
         }
     }
 
-    private func resetState() {
+    private func resetTransientState() {
         changeFilter.reset()
         targetSuppressors.removeAll()
-        lastRuntimeGeneration = nil
     }
 
     deinit {
