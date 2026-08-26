@@ -20,3 +20,6 @@ Local.xcconfig
 *.local.xcconfig
 Signing.xcconfig
 *.signing.xcconfig
+
+# MacOS
+.DS_Store
