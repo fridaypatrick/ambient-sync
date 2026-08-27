@@ -15,7 +15,7 @@ AmbientSync requires Apple silicon and macOS 26 or newer.
 
 ### Homebrew Cask
 
-After the release-generated cask update PR has merged into `main`, install AmbientSync from this repository tap:
+After the release workflow successfully updates `main`, the cask is available from this repository tap:
 
 ```sh
 brew tap fridaypatrick/ambient-sync https://github.com/fridaypatrick/ambient-sync.git
