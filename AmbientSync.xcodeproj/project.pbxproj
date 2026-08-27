@@ -385,6 +385,7 @@
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
+				MARKETING_VERSION = 1.0.0;
 				MACOSX_DEPLOYMENT_TARGET = 26.0;
 				PRODUCT_BUNDLE_IDENTIFIER = cloud.piatkowski.AmbientSync;
 				PRODUCT_NAME = "$(TARGET_NAME)";
@@ -409,6 +410,7 @@
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
+				MARKETING_VERSION = 1.0.0;
 				MACOSX_DEPLOYMENT_TARGET = 26.0;
 				PRODUCT_BUNDLE_IDENTIFIER = cloud.piatkowski.AmbientSync;
 				PRODUCT_NAME = "$(TARGET_NAME)";

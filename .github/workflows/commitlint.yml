@@ -1,0 +1,38 @@
+name: Commitlint
+
+on:
+  pull_request:
+    types: [opened, reopened, edited, synchronize]
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  pull-request-title:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Lint pull request title
+        uses: amannn/action-semantic-pull-request@48f256284bd46cdaab1048c3721360e808335d50
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+
+  commits:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out pull request commits
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+
+      - name: Lint pull request commits
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: >-
+          npx --yes --ignore-scripts
+          --package @commitlint/cli@21.2.2
+          --package @commitlint/config-conventional@21.2.2
+          commitlint --from "$BASE_SHA" --to "$HEAD_SHA"
+          --extends @commitlint/config-conventional

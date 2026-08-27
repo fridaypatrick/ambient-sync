@@ -1,0 +1,323 @@
+name: Release
+
+on:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-main
+  cancel-in-progress: false
+
+jobs:
+  calculate_release:
+    runs-on: ubuntu-latest
+    outputs:
+      release_required: ${{ steps.classify.outputs.release_required }}
+      version: ${{ steps.classify.outputs.version }}
+      tag: ${{ steps.classify.outputs.tag }}
+      calculated_sha: ${{ steps.classify.outputs.calculated_sha }}
+      bump_type: ${{ steps.classify.outputs.bump_type }}
+    steps:
+      - name: Check out full history
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          fetch-depth: 0
+
+      - name: Calculate semantic version
+        id: version
+        uses: PaulHatch/semantic-version@a8f8f59fd7f0625188492e945240f12d7ad2dca3
+        with:
+          branch: HEAD
+          tag_prefix: v
+          major_pattern: '/^[a-z]+(?:\([^)]*\))?!:/'
+          minor_pattern: '/^feat(?:\([^)]*\))?:/'
+          version_format: '${major}.${minor}.${patch}'
+          search_commit_body: false
+          enable_prerelease_mode: false
+
+      - name: Verify version calculation target
+        env:
+          CALCULATED_COMMIT: ${{ steps.version.outputs.current_commit }}
+        run: |
+          set -euo pipefail
+
+          [[ -n "$CALCULATED_COMMIT" ]] || { printf '%s\n' 'semantic-version did not return current_commit' >&2; exit 1; }
+          [[ "$CALCULATED_COMMIT" == "$GITHUB_SHA" ]] \
+            || { printf 'semantic-version current_commit %s does not match GITHUB_SHA %s\n' "$CALCULATED_COMMIT" "$GITHUB_SHA" >&2; exit 1; }
+
+      - name: Classify release commits
+        id: classify
+        env:
+          ACTION_VERSION: ${{ steps.version.outputs.version }}
+          ACTION_TAG: ${{ steps.version.outputs.version_tag }}
+          VERSION_TYPE: ${{ steps.version.outputs.version_type }}
+          IS_TAGGED: ${{ steps.version.outputs.is_tagged }}
+          PREVIOUS_COMMIT: ${{ steps.version.outputs.previous_commit }}
+          PREVIOUS_VERSION: ${{ steps.version.outputs.previous_version }}
+          CURRENT_COMMIT: ${{ steps.version.outputs.current_commit }}
+        run: |
+          set -euo pipefail
+
+          release_required=false
+          bump_level=0
+
+          if [[ "$IS_TAGGED" != 'true' && "$VERSION_TYPE" != 'none' ]]; then
+            if [[ -n "$PREVIOUS_COMMIT" ]]; then
+              commit_range="$PREVIOUS_COMMIT..$CURRENT_COMMIT"
+            else
+              commit_range="$CURRENT_COMMIT"
+            fi
+
+            breaking_subject='^[a-z]+(\([^)]*\))?!:'
+            feature_subject='^feat(\([^)]*\))?:'
+            patch_subject='^(fix|perf|revert)(\([^)]*\))?:'
+
+            while IFS= read -r commit; do
+              [[ -n "$commit" ]] || continue
+              subject="$(git show -s --format=%s "$commit")"
+              body="$(git show -s --format=%b "$commit")"
+              commit_level=0
+
+              if [[ "$subject" =~ $breaking_subject ]]; then
+                commit_level=3
+              else
+                has_breaking_footer=false
+                breaking_footer='^BREAKING( |-)CHANGE: .+$'
+                while IFS= read -r line; do
+                  line="${line%$'\r'}"
+                  if [[ "$line" =~ $breaking_footer ]]; then
+                    has_breaking_footer=true
+                    break
+                  fi
+                done <<< "$body"
+
+                if [[ "$has_breaking_footer" == 'true' ]]; then
+                  commit_level=3
+                elif [[ "$subject" =~ $feature_subject ]]; then
+                  commit_level=2
+                elif [[ "$subject" =~ $patch_subject ]]; then
+                  commit_level=1
+                fi
+              fi
+
+              if (( commit_level > bump_level )); then
+                bump_level="$commit_level"
+              fi
+            done < <(git rev-list "$commit_range")
+          fi
+
+          case "$bump_level" in
+            3) bump_type='major' ;;
+            2) bump_type='minor' ;;
+            1) bump_type='patch' ;;
+            *) bump_type='none' ;;
+          esac
+
+          if (( bump_level > 0 )); then
+            stable_version='^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$'
+            [[ "$PREVIOUS_VERSION" =~ $stable_version ]] \
+              || { printf 'invalid previous semantic version: %s\n' "$PREVIOUS_VERSION" >&2; exit 1; }
+            IFS=. read -r previous_major previous_minor previous_patch <<< "$PREVIOUS_VERSION"
+
+            case "$bump_level" in
+              3) calculated_version="$((previous_major + 1)).0.0" ;;
+              2) calculated_version="${previous_major}.$((previous_minor + 1)).0" ;;
+              1) calculated_version="${previous_major}.${previous_minor}.$((previous_patch + 1))" ;;
+            esac
+
+            calculated_tag="v$calculated_version"
+            release_required=true
+          else
+            calculated_version="$ACTION_VERSION"
+            calculated_tag="$ACTION_TAG"
+          fi
+
+          {
+            printf 'release_required=%s\n' "$release_required"
+            printf 'version=%s\n' "$calculated_version"
+            printf 'tag=%s\n' "$calculated_tag"
+            printf 'calculated_sha=%s\n' "$CURRENT_COMMIT"
+            printf 'bump_type=%s\n' "$bump_type"
+          } >> "$GITHUB_OUTPUT"
+
+  release:
+    needs: calculate_release
+    if: ${{ needs.calculate_release.outputs.release_required == 'true' }}
+    permissions:
+      contents: write
+    runs-on: macos-26
+    steps:
+      - name: Check out full history
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          fetch-depth: 0
+
+      - name: Verify release inputs
+        env:
+          CALCULATED_COMMIT: ${{ needs.calculate_release.outputs.calculated_sha }}
+          PLANNED_VERSION: ${{ needs.calculate_release.outputs.version }}
+          PLANNED_TAG: ${{ needs.calculate_release.outputs.tag }}
+        run: |
+          set -euo pipefail
+
+          stable_version='^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$'
+          [[ "$CALCULATED_COMMIT" == "$GITHUB_SHA" ]] \
+            || { printf 'planned commit %s does not match GITHUB_SHA %s\n' "$CALCULATED_COMMIT" "$GITHUB_SHA" >&2; exit 1; }
+          [[ "$(git rev-parse HEAD)" == "$GITHUB_SHA" ]] \
+            || { printf 'local HEAD does not match GITHUB_SHA %s\n' "$GITHUB_SHA" >&2; exit 1; }
+          [[ "$PLANNED_VERSION" =~ $stable_version ]] \
+            || { printf 'invalid planned semantic version: %s\n' "$PLANNED_VERSION" >&2; exit 1; }
+          [[ "$PLANNED_TAG" == "v$PLANNED_VERSION" ]] \
+            || { printf 'planned tag %s does not match planned version %s\n' "$PLANNED_TAG" "$PLANNED_VERSION" >&2; exit 1; }
+
+          if git rev-parse --verify --quiet "refs/tags/$PLANNED_TAG" >/dev/null; then
+            printf 'local tag already exists: %s\n' "$PLANNED_TAG" >&2
+            exit 1
+          fi
+
+          if [[ -n "$(git ls-remote --refs origin "refs/tags/$PLANNED_TAG")" ]]; then
+            printf 'remote tag already exists: %s\n' "$PLANNED_TAG" >&2
+            exit 1
+          fi
+
+          printf 'RELEASE_VERSION=%s\n' "$PLANNED_VERSION" >> "$GITHUB_ENV"
+          printf 'RELEASE_TAG=%s\n' "$PLANNED_TAG" >> "$GITHUB_ENV"
+
+      - name: Select Xcode 26.6
+        run: sudo xcode-select -s /Applications/Xcode_26.6.app
+
+      - name: Print release build environment
+        run: |
+          uname -m
+          sw_vers
+          xcode-select -p
+          xcodebuild -version
+          xcrun --sdk macosx --show-sdk-version
+          xcrun --sdk macosx --show-sdk-path
+
+      - name: Import Developer ID certificate
+        env:
+          MACOS_CERTIFICATE_BASE64: ${{ secrets.MACOS_CERTIFICATE_BASE64 }}
+          MACOS_CERTIFICATE_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
+          MACOS_KEYCHAIN_PASSWORD: ${{ secrets.MACOS_KEYCHAIN_PASSWORD }}
+        run: |
+          set -euo pipefail
+
+          [[ -n "$MACOS_CERTIFICATE_BASE64" ]] || { printf '%s\n' 'MACOS_CERTIFICATE_BASE64 is required' >&2; exit 1; }
+          [[ -n "$MACOS_CERTIFICATE_PASSWORD" ]] || { printf '%s\n' 'MACOS_CERTIFICATE_PASSWORD is required' >&2; exit 1; }
+          [[ -n "$MACOS_KEYCHAIN_PASSWORD" ]] || { printf '%s\n' 'MACOS_KEYCHAIN_PASSWORD is required' >&2; exit 1; }
+
+          keychain_path="$RUNNER_TEMP/ambient-sync-signing.keychain-db"
+          certificate_path="$RUNNER_TEMP/ambient-sync-developer-id.p12"
+          printf 'AMBIENT_SYNC_KEYCHAIN_PATH=%s\n' "$keychain_path" >> "$GITHUB_ENV"
+          printf 'AMBIENT_SYNC_CERTIFICATE_PATH=%s\n' "$certificate_path" >> "$GITHUB_ENV"
+          rm -f "$keychain_path" "$certificate_path"
+
+          printf '%s' "$MACOS_CERTIFICATE_BASE64" | base64 -D > "$certificate_path"
+          security create-keychain -p "$MACOS_KEYCHAIN_PASSWORD" "$keychain_path"
+          security set-keychain-settings -lut 21600 "$keychain_path"
+          security unlock-keychain -p "$MACOS_KEYCHAIN_PASSWORD" "$keychain_path"
+          security import "$certificate_path" \
+            -k "$keychain_path" \
+            -P "$MACOS_CERTIFICATE_PASSWORD" \
+            -T /usr/bin/codesign \
+            -T /usr/bin/security \
+            -T /usr/bin/xcodebuild
+          security set-key-partition-list \
+            -S apple-tool:,apple:,codesign: \
+            -s \
+            -k "$MACOS_KEYCHAIN_PASSWORD" \
+            "$keychain_path"
+          security list-keychains -d user -s "$keychain_path"
+
+      - name: Write App Store Connect API key
+        env:
+          APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+          APPLE_API_PRIVATE_KEY: ${{ secrets.APPLE_API_PRIVATE_KEY }}
+        run: |
+          set -euo pipefail
+
+          [[ -n "$APPLE_API_KEY_ID" ]] || { printf '%s\n' 'APPLE_API_KEY_ID is required' >&2; exit 1; }
+          [[ -n "$APPLE_API_PRIVATE_KEY" ]] || { printf '%s\n' 'APPLE_API_PRIVATE_KEY is required' >&2; exit 1; }
+
+          api_key_path="$RUNNER_TEMP/ambient-sync-api-key.p8"
+          printf 'APPLE_API_KEY_PATH=%s\n' "$api_key_path" >> "$GITHUB_ENV"
+          rm -f "$api_key_path"
+          printf '%s\n' "$APPLE_API_PRIVATE_KEY" > "$api_key_path"
+          chmod 600 "$api_key_path"
+
+      - name: Build and notarize release archive
+        env:
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+          APPLE_API_ISSUER_ID: ${{ secrets.APPLE_API_ISSUER_ID }}
+          GITHUB_RUN_NUMBER: ${{ github.run_number }}
+        run: ./scripts/build-release.sh "$RELEASE_VERSION"
+
+      - name: Verify release archive
+        run: |
+          set -euo pipefail
+
+          asset="dist/AmbientSync-${RELEASE_VERSION}.zip"
+          [[ -s "$asset" ]] || { printf 'release archive missing or empty: %s\n' "$asset" >&2; exit 1; }
+          unzip -t "$asset"
+
+      - name: Verify publish target
+        env:
+          CALCULATED_COMMIT: ${{ needs.calculate_release.outputs.calculated_sha }}
+          RELEASE_TAG: ${{ needs.calculate_release.outputs.tag }}
+        run: |
+          set -euo pipefail
+
+          [[ "$CALCULATED_COMMIT" == "$GITHUB_SHA" ]] \
+            || { printf 'planned commit %s does not match GITHUB_SHA %s\n' "$CALCULATED_COMMIT" "$GITHUB_SHA" >&2; exit 1; }
+          [[ "$(git rev-parse HEAD)" == "$GITHUB_SHA" ]] \
+            || { printf 'local HEAD does not match GITHUB_SHA %s\n' "$GITHUB_SHA" >&2; exit 1; }
+          [[ "$RELEASE_TAG" == "v$RELEASE_VERSION" ]] \
+            || { printf 'release tag %s does not match release version %s\n' "$RELEASE_TAG" "$RELEASE_VERSION" >&2; exit 1; }
+
+          if git rev-parse --verify --quiet "refs/tags/$RELEASE_TAG" >/dev/null; then
+            printf 'local tag already exists: %s\n' "$RELEASE_TAG" >&2
+            exit 1
+          fi
+
+          if [[ -n "$(git ls-remote --refs origin "refs/tags/$RELEASE_TAG")" ]]; then
+            printf 'remote tag already exists: %s\n' "$RELEASE_TAG" >&2
+            exit 1
+          fi
+
+      - name: Publish GitHub release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+
+          asset="dist/AmbientSync-${RELEASE_VERSION}.zip"
+          gh release create "$RELEASE_TAG" "$asset" \
+            --target "$GITHUB_SHA" \
+            --title "AmbientSync $RELEASE_VERSION" \
+            --generate-notes
+
+      - name: Clean up signing material
+        if: ${{ always() }}
+        run: |
+          set +e
+
+          keychain_path="${AMBIENT_SYNC_KEYCHAIN_PATH:-}"
+          certificate_path="${AMBIENT_SYNC_CERTIFICATE_PATH:-}"
+          api_key_path="${APPLE_API_KEY_PATH:-}"
+
+          if [[ -n "$keychain_path" ]]; then
+            security delete-keychain "$keychain_path" >/dev/null 2>&1 || true
+          fi
+          if [[ -n "$certificate_path" ]]; then
+            rm -f "$certificate_path"
+          fi
+          if [[ -n "$api_key_path" ]]; then
+            rm -f "$api_key_path"
+          fi
