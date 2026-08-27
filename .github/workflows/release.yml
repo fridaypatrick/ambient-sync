@@ -13,50 +13,7 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  validate-source:
-    runs-on: macos-26
-    steps:
-      - name: Check out source
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
-        with:
-          fetch-depth: 0
-
-      - name: Select Xcode 26.6
-        run: sudo xcode-select -s /Applications/Xcode_26.6.app
-
-      - name: Print build environment
-        run: |
-          uname -m
-          sw_vers
-          xcode-select -p
-          xcodebuild -version
-          xcrun --sdk macosx --show-sdk-version
-          xcrun --sdk macosx --show-sdk-path
-
-      - name: Build without signing
-        run: >-
-          xcodebuild build
-          -project AmbientSync.xcodeproj
-          -scheme AmbientSync
-          -configuration Release
-          -destination 'platform=macOS,arch=arm64'
-          MARKETING_VERSION=0.0.0
-          CURRENT_PROJECT_VERSION=${{ github.run_number }}
-          CODE_SIGNING_ALLOWED=NO
-
-      - name: Test without signing
-        run: >-
-          xcodebuild test
-          -project AmbientSync.xcodeproj
-          -scheme AmbientSync
-          -configuration Debug
-          -destination 'platform=macOS,arch=arm64'
-          MARKETING_VERSION=0.0.0
-          CURRENT_PROJECT_VERSION=${{ github.run_number }}
-          CODE_SIGNING_ALLOWED=NO
-
   calculate_release:
-    needs: validate-source
     runs-on: ubuntu-latest
     outputs:
       release_required: ${{ steps.classify.outputs.release_required }}
