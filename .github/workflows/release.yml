@@ -111,10 +111,10 @@ jobs:
           fi
 
           case "$bump_level" in
-            3) bump_type=major ;;
-            2) bump_type=minor ;;
-            1) bump_type=patch ;;
-            *) bump_type=none ;;
+            3) bump_type='major' ;;
+            2) bump_type='minor' ;;
+            1) bump_type='patch' ;;
+            *) bump_type='none' ;;
           esac
 
           if (( bump_level > 0 )); then
@@ -136,11 +136,13 @@ jobs:
             calculated_tag="$ACTION_TAG"
           fi
 
-          printf 'release_required=%s\n' "$release_required" >> "$GITHUB_OUTPUT"
-          printf 'version=%s\n' "$calculated_version" >> "$GITHUB_OUTPUT"
-          printf 'tag=%s\n' "$calculated_tag" >> "$GITHUB_OUTPUT"
-          printf 'calculated_sha=%s\n' "$CURRENT_COMMIT" >> "$GITHUB_OUTPUT"
-          printf 'bump_type=%s\n' "$bump_type" >> "$GITHUB_OUTPUT"
+          {
+            printf 'release_required=%s\n' "$release_required"
+            printf 'version=%s\n' "$calculated_version"
+            printf 'tag=%s\n' "$calculated_tag"
+            printf 'calculated_sha=%s\n' "$CURRENT_COMMIT"
+            printf 'bump_type=%s\n' "$bump_type"
+          } >> "$GITHUB_OUTPUT"
 
   release:
     needs: calculate_release
