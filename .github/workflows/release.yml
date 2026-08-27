@@ -541,7 +541,7 @@ jobs:
               --limit 1000 \
               --json tagName,isDraft,isPrerelease \
               --jq '.[] | select(.isDraft == false and .isPrerelease == false) | .tagName')"; then
-              printf '%s\n' 'Unable to determine latest stable release; skipping cask PR for recovered assets.' >&2
+              printf '%s\n' 'Unable to determine latest stable release; skipping cask update for recovered assets.' >&2
               update_cask=false
             else
               latest_stable_tag=''
@@ -558,18 +558,18 @@ jobs:
               done <<< "$stable_tags"
 
               if [[ -z "$latest_stable_tag" ]]; then
-                printf '%s\n' 'No stable semantic GitHub release found; skipping cask PR for recovered assets.' >&2
+                printf '%s\n' 'No stable semantic GitHub release found; skipping cask update for recovered assets.' >&2
                 update_cask=false
               elif [[ "$latest_stable_tag" != "$RELEASE_TAG" ]]; then
-                printf 'Recovered release %s is not latest stable release %s; skipping cask PR.\n' \
+                printf 'Recovered release %s is not latest stable release %s; skipping cask update.\n' \
                   "$RELEASE_TAG" "$latest_stable_tag" >&2
                 update_cask=false
               else
-                printf 'Recovered release %s is latest stable release; enabling cask PR.\n' "$RELEASE_TAG"
+                printf 'Recovered release %s is latest stable release; enabling cask update.\n' "$RELEASE_TAG"
               fi
             fi
           else
-            printf 'Normal release %s enables cask PR.\n' "$RELEASE_TAG"
+            printf 'Normal release %s enables cask update.\n' "$RELEASE_TAG"
           fi
 
           printf 'update_cask=%s\n' "$update_cask" >> "$GITHUB_OUTPUT"
@@ -598,26 +598,26 @@ jobs:
     if: ${{ needs.release.result == 'success' && needs.release.outputs.update_cask == 'true' }}
     permissions:
       contents: write
-      pull-requests: write
     runs-on: ubuntu-latest
     env:
-      GH_TOKEN: ${{ secrets.RELEASE_PR_TOKEN }}
+      GH_TOKEN: ${{ github.token }}
       RELEASE_VERSION: ${{ needs.release.outputs.version }}
       RELEASE_TAG: ${{ needs.release.outputs.tag }}
       RELEASE_DMG_SHA: ${{ needs.release.outputs.dmg_sha }}
     steps:
-      - name: Require dedicated cask PR token
+      - name: Announce post-release cask update
         run: |
           set -euo pipefail
-          printf '%s\n' 'Cask PR runs after asset publication; failures leave the GitHub release intact.'
-          [[ -n "$GH_TOKEN" ]] || { printf '%s\n' 'RELEASE_PR_TOKEN is required for cask PR automation' >&2; exit 1; }
+          printf '%s\n' 'Cask direct commit runs after asset publication; failures leave the GitHub release intact.'
+          [[ -n "$GH_TOKEN" ]] || { printf '%s\n' 'GITHUB_TOKEN is required for direct cask commit automation' >&2; exit 1; }
 
-      - name: Check out main for cask branch base
+      - name: Check out current main for cask update
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           ref: main
           fetch-depth: 0
-          token: ${{ secrets.RELEASE_PR_TOKEN }}
+          persist-credentials: true
+          token: ${{ github.token }}
 
       - name: Guard against Cask downgrade
         run: |
@@ -651,16 +651,17 @@ jobs:
               || { printf '%s\n' 'origin/main Cask has invalid sha256' >&2; exit 1; }
 
             # This helper is also sourced by latest-release recovery gating.
+            # shellcheck disable=SC1090,SC1091 # Workflow checkout supplies helper path.
             source "$GITHUB_WORKSPACE/scripts/semver.sh"
 
             normalized_existing_sha="$(printf '%s' "$existing_sha" | tr '[:upper:]' '[:lower:]')"
             normalized_release_sha="$(printf '%s' "$RELEASE_DMG_SHA" | tr '[:upper:]' '[:lower:]')"
             if version_is_greater "$existing_version" "$RELEASE_VERSION"; then
-              printf 'origin/main Cask version %s is newer than release %s; skipping cask PR.\n' \
+              printf 'origin/main Cask version %s is newer than release %s; skipping cask update.\n' \
                 "$existing_version" "$RELEASE_VERSION"
               cask_update_allowed=false
             elif [[ "$existing_version" == "$RELEASE_VERSION" && "$normalized_existing_sha" == "$normalized_release_sha" ]]; then
-              printf 'origin/main Cask already matches release %s and DMG SHA; skipping cask PR.\n' "$RELEASE_VERSION"
+              printf 'origin/main Cask already matches release %s and DMG SHA; skipping cask update.\n' "$RELEASE_VERSION"
               cask_update_allowed=false
             fi
           fi
@@ -695,103 +696,136 @@ jobs:
 
           printf 'RELEASE_DMG_SHA=%s\n' "$normalized_published_sha" >> "$GITHUB_ENV"
 
-      - name: Check out or create unique cask update branch
+      - name: Render and commit cask update on main
         if: ${{ env.CASK_UPDATE_ALLOWED == 'true' }}
         run: |
           set -euo pipefail
 
-          cask_branch="automation/cask/ambientsync-v${RELEASE_VERSION}"
-          git fetch origin main
-          if git ls-remote --exit-code --heads origin "refs/heads/$cask_branch" >/dev/null 2>&1; then
-            git fetch origin "refs/heads/$cask_branch:refs/remotes/origin/$cask_branch"
-            # Version branches are reusable only when their net diff is cask-only.
-            # Any unrelated branch diff fails closed before automation can edit it.
-            existing_branch_files="$(git diff --name-only "origin/main...origin/$cask_branch")"
-            if [[ -n "$existing_branch_files" && "$existing_branch_files" != Casks/ambientsync.rb ]]; then
-              printf 'existing cask branch contains unrelated diff(s): %s\n' "$existing_branch_files" >&2
-              exit 1
-            fi
-            git switch --track -c "$cask_branch" "origin/$cask_branch"
-          else
-            git switch --create "$cask_branch" origin/main
-          fi
-          printf 'CASK_BRANCH=%s\n' "$cask_branch" >> "$GITHUB_ENV"
+          cask_path='Casks/ambientsync.rb'
+          stable_version='^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$'
+          max_attempts=3
 
-      - name: Render exact release cask
-        if: ${{ env.CASK_UPDATE_ALLOWED == 'true' }}
-        run: |
-          set -euo pipefail
-          ./scripts/update-cask.sh "$RELEASE_VERSION" "$RELEASE_DMG_SHA"
-          ruby -c Casks/ambientsync.rb
+          # Recheck every fetched main before rendering. A newer concurrent Cask
+          # must win; this job never downgrades it.
+          # shellcheck disable=SC1090,SC1091 # Workflow checkout supplies helper path.
+          source "$GITHUB_WORKSPACE/scripts/semver.sh"
+          cask_update_allowed_for_base=true
+          check_cask_update_allowed() {
+            local existing_version=''
+            local existing_sha=''
+            local line
+            local version_line_pattern='^[[:space:]]*version[[:space:]]+"([0-9]+\.[0-9]+\.[0-9]+)"[[:space:]]*$'
+            local sha_line_pattern='^[[:space:]]*sha256[[:space:]]+"([0-9A-Fa-f]{64})"[[:space:]]*$'
 
-      - name: Commit and push cask update
-        if: ${{ env.CASK_UPDATE_ALLOWED == 'true' }}
-        run: |
-          set -euo pipefail
+            cask_update_allowed_for_base=true
+            if git cat-file -e "origin/main:$cask_path" 2>/dev/null; then
+              while IFS= read -r line; do
+                if [[ "$line" =~ $version_line_pattern ]]; then
+                  [[ -z "$existing_version" ]] \
+                    || { printf '%s\n' 'origin/main Cask has multiple version stanzas' >&2; exit 1; }
+                  existing_version="${BASH_REMATCH[1]}"
+                elif [[ "$line" =~ $sha_line_pattern ]]; then
+                  [[ -z "$existing_sha" ]] \
+                    || { printf '%s\n' 'origin/main Cask has multiple sha256 stanzas' >&2; exit 1; }
+                  existing_sha="${BASH_REMATCH[1]}"
+                fi
+              done < <(git show "origin/main:$cask_path")
 
-          verify_cask_only_diff() {
-            local changed_files
-            changed_files="$(git diff --name-only origin/main...HEAD)"
-            if [[ -n "$changed_files" && "$changed_files" != Casks/ambientsync.rb ]]; then
-              printf 'cask branch final diff contains unrelated file(s): %s\n' "$changed_files" >&2
-              exit 1
+              [[ "$existing_version" =~ $stable_version ]] \
+                || { printf 'origin/main Cask has invalid version: %s\n' "$existing_version" >&2; exit 1; }
+              [[ "$existing_sha" =~ ^[0-9A-Fa-f]{64}$ ]] \
+                || { printf '%s\n' 'origin/main Cask has invalid sha256' >&2; exit 1; }
+
+              normalized_existing_sha="$(printf '%s' "$existing_sha" | tr '[:upper:]' '[:lower:]')"
+              normalized_release_sha="$(printf '%s' "$RELEASE_DMG_SHA" | tr '[:upper:]' '[:lower:]')"
+              if version_is_greater "$existing_version" "$RELEASE_VERSION"; then
+                printf 'origin/main Cask version %s is newer than release %s; skipping cask update.\n' \
+                  "$existing_version" "$RELEASE_VERSION"
+                cask_update_allowed_for_base=false
+              elif [[ "$existing_version" == "$RELEASE_VERSION" && "$normalized_existing_sha" == "$normalized_release_sha" ]]; then
+                printf 'origin/main Cask already matches release %s and DMG SHA; skipping cask update.\n' "$RELEASE_VERSION"
+                cask_update_allowed_for_base=false
+              fi
             fi
           }
 
-          git diff --check
-          git add -- Casks/ambientsync.rb
-          staged_files="$(git diff --cached --name-only)"
-          if [[ -n "$staged_files" && "$staged_files" != Casks/ambientsync.rb ]]; then
-            printf 'unexpected staged files: %s\n' "$staged_files" >&2
-            exit 1
-          fi
+          verify_only_cask_path() {
+            local status_line
+            local status_path
+            while IFS= read -r status_line; do
+              [[ -n "$status_line" ]] || continue
+              status_path="${status_line:3}"
+              [[ "$status_path" == "$cask_path" ]] \
+                || { printf 'cask update contains unexpected path: %s\n' "$status_path" >&2; exit 1; }
+            done < <(git status --porcelain --untracked-files=all)
+          }
 
-          if git diff --cached --quiet -- Casks/ambientsync.rb; then
-            printf 'Cask already matches release %s\n' "$RELEASE_VERSION"
-          else
-            git config user.name 'github-actions[bot]'
-            git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-            git commit -m "chore(cask): update AmbientSync to v${RELEASE_VERSION}"
-            # Plain push only. A concurrent or externally modified branch must fail,
-            # never be replaced with a force push.
-            git push --set-upstream origin "$CASK_BRANCH"
-          fi
-          [[ -z "$(git status --porcelain)" ]] || { printf '%s\n' 'cask branch has unexpected uncommitted changes' >&2; exit 1; }
-          verify_cask_only_diff
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
 
-      - name: Create or refresh cask pull request
-        if: ${{ env.CASK_UPDATE_ALLOWED == 'true' }}
-        run: |
-          set -euo pipefail
+          for (( attempt = 1; attempt <= max_attempts; attempt++ )); do
+            git fetch --no-tags origin main
+            base_oid="$(git rev-parse --verify origin/main)"
+            [[ -z "$(git status --porcelain --untracked-files=all)" ]] \
+              || { printf '%s\n' 'cask update checkout has unexpected changes before reset' >&2; exit 1; }
+            git reset --hard "$base_oid"
+            [[ "$(git rev-parse HEAD)" == "$base_oid" ]] \
+              || { printf 'working base %s does not match fetched origin/main %s\n' "$(git rev-parse HEAD)" "$base_oid" >&2; exit 1; }
 
-          git fetch origin main
-          git fetch origin "refs/heads/$CASK_BRANCH:refs/remotes/origin/$CASK_BRANCH"
-          local_head_oid="$(git rev-parse HEAD)"
-          remote_head_oid="$(git rev-parse "origin/$CASK_BRANCH")"
-          [[ "$remote_head_oid" == "$local_head_oid" ]] \
-            || { printf 'cask branch drifted before PR operation: remote %s, local %s\n' "$remote_head_oid" "$local_head_oid" >&2; exit 1; }
-          remote_pr_files="$(git diff --name-only "origin/main...origin/$CASK_BRANCH")"
-          [[ "$remote_pr_files" == Casks/ambientsync.rb ]] \
-            || { printf 'remote cask pull request diff must contain exactly Casks/ambientsync.rb, got: %s\n' "$remote_pr_files" >&2; exit 1; }
+            check_cask_update_allowed
+            if [[ "$cask_update_allowed_for_base" != true ]]; then
+              exit 0
+            fi
 
-          pr_title="chore(cask): update AmbientSync to v${RELEASE_VERSION}"
-          pr_body="$(printf 'Automated Homebrew Cask update for release %s.\n\nDMG SHA-256: %s\n\nThis post-publish job is intentionally separate from asset publication; a PR failure does not delete or roll back the GitHub release.\n' "$RELEASE_TAG" "\`$RELEASE_DMG_SHA\`")"
-          pr_number="$(gh pr list --base main --head "$CASK_BRANCH" --state open --json number --jq '.[0].number')"
+            ./scripts/update-cask.sh "$RELEASE_VERSION" "$RELEASE_DMG_SHA"
+            ruby -c "$cask_path"
+            changed_files="$(git diff --name-only "$base_oid" --)"
+            [[ -z "$changed_files" || "$changed_files" == "$cask_path" ]] \
+              || { printf 'cask update final diff contains unrelated file(s): %s\n' "$changed_files" >&2; exit 1; }
+            verify_only_cask_path
+            git diff --check
+            git add -- "$cask_path"
 
-          if [[ -n "$pr_number" ]]; then
-            gh pr edit "$pr_number" --title "$pr_title" --body "$pr_body"
-            printf 'Refreshed cask pull request #%s\n' "$pr_number"
-          elif git diff --quiet "origin/main...HEAD" -- Casks/ambientsync.rb; then
-            printf 'No cask pull request needed; main already matches release %s\n' "$RELEASE_VERSION"
-          else
-            gh pr create --base main --head "$CASK_BRANCH" --title "$pr_title" --body "$pr_body"
-          fi
+            staged_files="$(git diff --cached --name-only)"
+            [[ -z "$staged_files" || "$staged_files" == "$cask_path" ]] \
+              || { printf 'unexpected staged files: %s\n' "$staged_files" >&2; exit 1; }
 
-          pr_number="$(gh pr list --base main --head "$CASK_BRANCH" --state open --json number --jq '.[0].number')"
-          [[ -n "$pr_number" ]] || { printf 'unable to locate cask pull request after operation\n' >&2; exit 1; }
-          pr_head_oid="$(gh pr view "$pr_number" --json headRefOid --jq '.headRefOid')"
-          pr_files="$(gh pr view "$pr_number" --json files --jq '[.files[].path] | join("\n")')"
-          [[ "$pr_head_oid" == "$local_head_oid" ]] \
-            || { printf 'cask pull request head drifted: remote %s, expected %s\n' "$pr_head_oid" "$local_head_oid" >&2; exit 1; }
-          [[ "$pr_files" == Casks/ambientsync.rb ]] \
-            || { printf 'cask pull request files must contain exactly Casks/ambientsync.rb, got: %s\n' "$pr_files" >&2; exit 1; }
+            if git diff --cached --quiet -- "$cask_path"; then
+              printf 'origin/main already contains exact generated Cask for release %s; no commit needed.\n' "$RELEASE_VERSION"
+              exit 0
+            fi
+
+            verify_only_cask_path
+            git diff --cached --check
+            git commit -m "ci: update Homebrew cask to ${RELEASE_VERSION}"
+            commit_oid="$(git rev-parse HEAD)"
+            [[ "$(git rev-parse HEAD^)" == "$base_oid" ]] \
+              || { printf 'cask commit parent does not match fetched origin/main %s\n' "$base_oid" >&2; exit 1; }
+            commit_files="$(git diff-tree --no-commit-id --name-only -r "$commit_oid")"
+            [[ "$commit_files" == "$cask_path" ]] \
+              || { printf 'cask commit must change exactly %s, got: %s\n' "$cask_path" "$commit_files" >&2; exit 1; }
+            [[ -z "$(git status --porcelain --untracked-files=all)" ]] \
+              || { printf '%s\n' 'cask commit left unexpected uncommitted changes' >&2; exit 1; }
+
+            # Normal fast-forward only. Concurrent main movement causes push
+            # rejection, then next attempt fetches, resets, and renders again.
+            if git push origin "HEAD:main"; then
+              printf 'Committed cask update %s to main at %s\n' "$RELEASE_VERSION" "$commit_oid"
+              exit 0
+            else
+              push_status=$?
+            fi
+            printf 'Direct cask commit push failed on attempt %d/%d. If branch rules rejected it, they must allow github-actions[bot]/Actions App direct contents writes; no force push or bypass was attempted.\n' \
+              "$attempt" "$max_attempts" >&2
+            if (( attempt == max_attempts )); then
+              if [[ -n "${GITHUB_STEP_SUMMARY:-}" ]]; then
+                {
+                  printf '## Homebrew cask direct commit failed\n\n'
+                  printf '%s\n' '- Release assets were already published; no release rollback was attempted.'
+                  printf '%s\n' '- Direct push requires branch rules to allow github-actions[bot] / Actions App contents writes.'
+                } >> "$GITHUB_STEP_SUMMARY"
+              fi
+              exit "$push_status"
+            fi
+            printf 'Retrying cask update from latest origin/main.\n' >&2
+          done
