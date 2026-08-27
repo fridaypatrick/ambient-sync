@@ -4,16 +4,37 @@ on:
   push:
     branches:
       - main
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing stable release tag to rebuild (for example, v1.2.3)
+        required: true
+        type: string
+      version:
+        description: Stable release version matching tag without v (for example, 1.2.3)
+        required: true
+        type: string
+      target_sha:
+        description: 40-character commit SHA targeted by tag
+        required: true
+        type: string
+      confirmation:
+        description: Type REBUILD_EXISTING_RELEASE to confirm asset replacement
+        required: true
+        type: string
 
 permissions:
   contents: read
 
+# Serialize normal and recovery releases. This prevents any run from replacing
+# or publishing assets while another run is operating on the same release lane.
 concurrency:
   group: release-main
   cancel-in-progress: false
 
 jobs:
   calculate_release:
+    if: ${{ github.event_name == 'push' }}
     runs-on: ubuntu-latest
     outputs:
       release_required: ${{ steps.classify.outputs.release_required }}
@@ -144,48 +165,150 @@ jobs:
             printf 'bump_type=%s\n' "$bump_type"
           } >> "$GITHUB_OUTPUT"
 
-  release:
-    needs: calculate_release
-    if: ${{ needs.calculate_release.outputs.release_required == 'true' }}
+  validate_manual_recovery:
+    if: ${{ github.event_name == 'workflow_dispatch' }}
     permissions:
-      contents: write
-    runs-on: macos-26
+      contents: read
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.validate.outputs.tag }}
+      version: ${{ steps.validate.outputs.version }}
+      target_sha: ${{ steps.validate.outputs.target_sha }}
     steps:
-      - name: Check out full history
+      - name: Check out repository metadata
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           fetch-depth: 0
 
-      - name: Verify release inputs
+      - name: Validate existing release target
+        id: validate
         env:
-          CALCULATED_COMMIT: ${{ needs.calculate_release.outputs.calculated_sha }}
-          PLANNED_VERSION: ${{ needs.calculate_release.outputs.version }}
-          PLANNED_TAG: ${{ needs.calculate_release.outputs.tag }}
+          REQUEST_TAG: ${{ inputs.tag }}
+          REQUEST_VERSION: ${{ inputs.version }}
+          REQUEST_TARGET_SHA: ${{ inputs.target_sha }}
+          REQUEST_CONFIRMATION: ${{ inputs.confirmation }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
 
           stable_version='^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$'
-          [[ "$CALCULATED_COMMIT" == "$GITHUB_SHA" ]] \
-            || { printf 'planned commit %s does not match GITHUB_SHA %s\n' "$CALCULATED_COMMIT" "$GITHUB_SHA" >&2; exit 1; }
-          [[ "$(git rev-parse HEAD)" == "$GITHUB_SHA" ]] \
-            || { printf 'local HEAD does not match GITHUB_SHA %s\n' "$GITHUB_SHA" >&2; exit 1; }
+          stable_tag="^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$"
+          [[ "$REQUEST_TAG" =~ $stable_tag ]] \
+            || { printf 'invalid recovery tag: %s\n' "$REQUEST_TAG" >&2; exit 1; }
+          [[ "$REQUEST_VERSION" =~ $stable_version ]] \
+            || { printf 'invalid recovery version: %s\n' "$REQUEST_VERSION" >&2; exit 1; }
+          [[ "$REQUEST_VERSION" == "${REQUEST_TAG#v}" ]] \
+            || { printf 'recovery tag %s does not match version %s\n' "$REQUEST_TAG" "$REQUEST_VERSION" >&2; exit 1; }
+          [[ "$REQUEST_TARGET_SHA" =~ ^[0-9A-Fa-f]{40}$ ]] \
+            || { printf '%s\n' 'recovery target_sha must be a 40-character commit SHA' >&2; exit 1; }
+          [[ "$REQUEST_CONFIRMATION" == 'REBUILD_EXISTING_RELEASE' ]] \
+            || { printf '%s\n' 'confirmation must exactly equal REBUILD_EXISTING_RELEASE' >&2; exit 1; }
+
+          remote_tag_line="$(git ls-remote --refs origin "refs/tags/$REQUEST_TAG")"
+          [[ -n "$remote_tag_line" ]] \
+            || { printf 'remote tag does not exist: %s\n' "$REQUEST_TAG" >&2; exit 1; }
+          read -r remote_tag_object remote_tag_ref <<< "$remote_tag_line"
+          [[ "$remote_tag_ref" == "refs/tags/$REQUEST_TAG" ]] \
+            || { printf 'remote tag lookup returned an unexpected ref for %s\n' "$REQUEST_TAG" >&2; exit 1; }
+          [[ "$remote_tag_object" =~ ^[0-9A-Fa-f]{40}$ ]] \
+            || { printf 'remote tag object is not a SHA for %s\n' "$REQUEST_TAG" >&2; exit 1; }
+
+          git fetch --force origin "refs/tags/$REQUEST_TAG:refs/tags/$REQUEST_TAG"
+          tag_target_sha="$(git rev-parse --verify "$REQUEST_TAG^{commit}")"
+          requested_target_sha="$(printf '%s' "$REQUEST_TARGET_SHA" | tr '[:upper:]' '[:lower:]')"
+          [[ "$tag_target_sha" == "$requested_target_sha" ]] \
+            || { printf 'tag %s targets %s, not requested target %s\n' "$REQUEST_TAG" "$tag_target_sha" "$requested_target_sha" >&2; exit 1; }
+
+          if ! release_tag="$(gh release view "$REQUEST_TAG" --json tagName --template '{{.tagName}}')"; then
+            printf 'remote GitHub release does not exist: %s\n' "$REQUEST_TAG" >&2
+            exit 1
+          fi
+          release_is_draft="$(gh release view "$REQUEST_TAG" --json isDraft --template '{{.isDraft}}')"
+          release_is_prerelease="$(gh release view "$REQUEST_TAG" --json isPrerelease --template '{{.isPrerelease}}')"
+          [[ "$release_tag" == "$REQUEST_TAG" ]] \
+            || { printf 'GitHub release tag %s does not match requested tag %s\n' "$release_tag" "$REQUEST_TAG" >&2; exit 1; }
+          [[ "$release_is_draft" == false && "$release_is_prerelease" == false ]] \
+            || { printf 'GitHub release %s must be published and stable\n' "$REQUEST_TAG" >&2; exit 1; }
+
+          {
+            printf 'tag=%s\n' "$REQUEST_TAG"
+            printf 'version=%s\n' "$REQUEST_VERSION"
+            printf 'target_sha=%s\n' "$requested_target_sha"
+          } >> "$GITHUB_OUTPUT"
+
+  release:
+    needs:
+      - calculate_release
+      - validate_manual_recovery
+    if: >-
+      ${{ always() &&
+          ((github.event_name == 'push' &&
+            needs.calculate_release.result == 'success' &&
+            needs.calculate_release.outputs.release_required == 'true') ||
+           (github.event_name == 'workflow_dispatch' &&
+            needs.validate_manual_recovery.result == 'success')) }}
+    permissions:
+      contents: write
+    runs-on: macos-26
+    outputs:
+      version: ${{ steps.asset_metadata.outputs.version }}
+      tag: ${{ steps.asset_metadata.outputs.tag }}
+      target_sha: ${{ steps.asset_metadata.outputs.target_sha }}
+      dmg_sha: ${{ steps.asset_metadata.outputs.dmg_sha }}
+      update_cask: ${{ steps.cask_gate.outputs.update_cask }}
+    steps:
+      - name: Check out exact release target
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && needs.validate_manual_recovery.outputs.tag || github.sha }}
+          fetch-depth: 0
+
+      - name: Verify release inputs
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          CALCULATED_COMMIT: ${{ needs.calculate_release.outputs.calculated_sha }}
+          PLANNED_VERSION: ${{ github.event_name == 'workflow_dispatch' && needs.validate_manual_recovery.outputs.version || needs.calculate_release.outputs.version }}
+          PLANNED_TAG: ${{ github.event_name == 'workflow_dispatch' && needs.validate_manual_recovery.outputs.tag || needs.calculate_release.outputs.tag }}
+          PLANNED_TARGET_SHA: ${{ github.event_name == 'workflow_dispatch' && needs.validate_manual_recovery.outputs.target_sha || github.sha }}
+        run: |
+          set -euo pipefail
+
+          stable_version='^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$'
+          stable_tag="^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$"
           [[ "$PLANNED_VERSION" =~ $stable_version ]] \
             || { printf 'invalid planned semantic version: %s\n' "$PLANNED_VERSION" >&2; exit 1; }
-          [[ "$PLANNED_TAG" == "v$PLANNED_VERSION" ]] \
+          [[ "$PLANNED_TAG" =~ $stable_tag && "$PLANNED_TAG" == "v$PLANNED_VERSION" ]] \
             || { printf 'planned tag %s does not match planned version %s\n' "$PLANNED_TAG" "$PLANNED_VERSION" >&2; exit 1; }
+          [[ "$PLANNED_TARGET_SHA" =~ ^[0-9A-Fa-f]{40}$ ]] \
+            || { printf 'invalid planned target SHA: %s\n' "$PLANNED_TARGET_SHA" >&2; exit 1; }
+          [[ "$(git rev-parse HEAD)" == "$PLANNED_TARGET_SHA" ]] \
+            || { printf 'checked out commit %s does not match planned target %s\n' "$(git rev-parse HEAD)" "$PLANNED_TARGET_SHA" >&2; exit 1; }
 
-          if git rev-parse --verify --quiet "refs/tags/$PLANNED_TAG" >/dev/null; then
-            printf 'local tag already exists: %s\n' "$PLANNED_TAG" >&2
-            exit 1
+          if [[ "$EVENT_NAME" == push ]]; then
+            [[ "$CALCULATED_COMMIT" == "$GITHUB_SHA" ]] \
+              || { printf 'planned commit %s does not match GITHUB_SHA %s\n' "$CALCULATED_COMMIT" "$GITHUB_SHA" >&2; exit 1; }
+            [[ "$PLANNED_TARGET_SHA" == "$GITHUB_SHA" ]] \
+              || { printf 'planned target %s does not match GITHUB_SHA %s\n' "$PLANNED_TARGET_SHA" "$GITHUB_SHA" >&2; exit 1; }
+
+            if git rev-parse --verify --quiet "refs/tags/$PLANNED_TAG" >/dev/null; then
+              printf 'local tag already exists: %s\n' "$PLANNED_TAG" >&2
+              exit 1
+            fi
+
+            if [[ -n "$(git ls-remote --refs origin "refs/tags/$PLANNED_TAG")" ]]; then
+              printf 'remote tag already exists: %s\n' "$PLANNED_TAG" >&2
+              exit 1
+            fi
+          else
+            [[ "$(git rev-parse --verify "$PLANNED_TAG^{commit}")" == "$PLANNED_TARGET_SHA" ]] \
+              || { printf 'checked out tag %s does not target %s\n' "$PLANNED_TAG" "$PLANNED_TARGET_SHA" >&2; exit 1; }
           fi
 
-          if [[ -n "$(git ls-remote --refs origin "refs/tags/$PLANNED_TAG")" ]]; then
-            printf 'remote tag already exists: %s\n' "$PLANNED_TAG" >&2
-            exit 1
-          fi
-
-          printf 'RELEASE_VERSION=%s\n' "$PLANNED_VERSION" >> "$GITHUB_ENV"
-          printf 'RELEASE_TAG=%s\n' "$PLANNED_TAG" >> "$GITHUB_ENV"
+          {
+            printf 'RELEASE_VERSION=%s\n' "$PLANNED_VERSION"
+            printf 'RELEASE_TAG=%s\n' "$PLANNED_TAG"
+            printf 'RELEASE_TARGET_SHA=%s\n' "$PLANNED_TARGET_SHA"
+          } >> "$GITHUB_ENV"
 
       - name: Select Xcode 26.6
         run: sudo xcode-select -s /Applications/Xcode_26.6.app
@@ -213,8 +336,10 @@ jobs:
 
           keychain_path="$RUNNER_TEMP/ambient-sync-signing.keychain-db"
           certificate_path="$RUNNER_TEMP/ambient-sync-developer-id.p12"
-          printf 'AMBIENT_SYNC_KEYCHAIN_PATH=%s\n' "$keychain_path" >> "$GITHUB_ENV"
-          printf 'AMBIENT_SYNC_CERTIFICATE_PATH=%s\n' "$certificate_path" >> "$GITHUB_ENV"
+          {
+            printf 'AMBIENT_SYNC_KEYCHAIN_PATH=%s\n' "$keychain_path"
+            printf 'AMBIENT_SYNC_CERTIFICATE_PATH=%s\n' "$certificate_path"
+          } >> "$GITHUB_ENV"
           rm -f "$keychain_path" "$certificate_path"
 
           printf '%s' "$MACOS_CERTIFICATE_BASE64" | base64 -D > "$certificate_path"
@@ -250,34 +375,88 @@ jobs:
           printf '%s\n' "$APPLE_API_PRIVATE_KEY" > "$api_key_path"
           chmod 600 "$api_key_path"
 
-      - name: Build and notarize release archive
+      - name: Build and notarize ZIP and DMG release assets
         env:
           APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
           APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
           APPLE_API_ISSUER_ID: ${{ secrets.APPLE_API_ISSUER_ID }}
           GITHUB_RUN_NUMBER: ${{ github.run_number }}
-        run: ./scripts/build-release.sh "$RELEASE_VERSION"
-
-      - name: Verify release archive
         run: |
           set -euo pipefail
 
-          asset="dist/AmbientSync-${RELEASE_VERSION}.zip"
-          [[ -s "$asset" ]] || { printf 'release archive missing or empty: %s\n' "$asset" >&2; exit 1; }
-          unzip -t "$asset"
+          if [[ "$GITHUB_EVENT_NAME" == workflow_dispatch ]]; then
+            # Older release tags may predate this DMG-capable automation. Keep
+            # their app source/project checkout exact, but run build automation
+            # from the workflow revision that requested recovery.
+            git fetch origin "$GITHUB_SHA"
+            automation_script="$RUNNER_TEMP/ambient-sync-build-release.sh"
+            semver_script="$RUNNER_TEMP/ambient-sync-semver.sh"
+            git show "$GITHUB_SHA:scripts/build-release.sh" > "$automation_script"
+            git show "$GITHUB_SHA:scripts/semver.sh" > "$semver_script"
+            chmod +x "$automation_script"
+            printf 'SEMVER_HELPER_PATH=%s\n' "$semver_script" >> "$GITHUB_ENV"
+            RELEASE_ROOT_DIR="$GITHUB_WORKSPACE" "$automation_script" "$RELEASE_VERSION"
+          else
+            printf 'SEMVER_HELPER_PATH=%s\n' "$GITHUB_WORKSPACE/scripts/semver.sh" >> "$GITHUB_ENV"
+            ./scripts/build-release.sh "$RELEASE_VERSION"
+          fi
+
+      - name: Verify release assets and checksums
+        id: asset_metadata
+        run: |
+          set -euo pipefail
+
+          zip_asset="dist/AmbientSync-${RELEASE_VERSION}.zip"
+          dmg_asset="dist/AmbientSync-${RELEASE_VERSION}-arm64.dmg"
+          zip_checksum="${zip_asset}.sha256"
+          dmg_checksum="${dmg_asset}.sha256"
+
+          for asset in "$zip_asset" "$dmg_asset" "$zip_checksum" "$dmg_checksum"; do
+            [[ -s "$asset" ]] || { printf 'release asset missing or empty: %s\n' "$asset" >&2; exit 1; }
+          done
+          unzip -t "$zip_asset"
+          hdiutil verify "$dmg_asset"
+
+          verify_checksum() {
+            local asset="$1"
+            local checksum="$2"
+            local expected_hash=''
+            local expected_name=''
+            local actual_hash=''
+            local actual_name=''
+
+            read -r expected_hash expected_name < "$checksum"
+            read -r actual_hash actual_name < <(cd "$(dirname "$asset")" && shasum -a 256 "$(basename "$asset")")
+            [[ "$expected_hash" == "$actual_hash" ]] \
+              || { printf 'checksum mismatch for %s\n' "$asset" >&2; exit 1; }
+            [[ "$expected_name" == "$(basename "$asset")" && "$actual_name" == "$(basename "$asset")" ]] \
+              || { printf 'checksum filename mismatch for %s\n' "$asset" >&2; exit 1; }
+          }
+
+          verify_checksum "$zip_asset" "$zip_checksum"
+          verify_checksum "$dmg_asset" "$dmg_checksum"
+
+          dmg_sha=''
+          dmg_sha_name=''
+          read -r dmg_sha dmg_sha_name < "$dmg_checksum"
+          [[ "$dmg_sha" =~ ^[0-9a-fA-F]{64}$ ]] || { printf '%s\n' 'DMG checksum is not a SHA-256 digest' >&2; exit 1; }
+          [[ "$dmg_sha_name" == "$(basename "$dmg_asset")" ]] || { printf '%s\n' 'DMG checksum names unexpected asset' >&2; exit 1; }
+
+          {
+            printf 'version=%s\n' "$RELEASE_VERSION"
+            printf 'tag=%s\n' "$RELEASE_TAG"
+            printf 'target_sha=%s\n' "$RELEASE_TARGET_SHA"
+            printf 'dmg_sha=%s\n' "$dmg_sha"
+          } >> "$GITHUB_OUTPUT"
 
       - name: Verify publish target
-        env:
-          CALCULATED_COMMIT: ${{ needs.calculate_release.outputs.calculated_sha }}
-          RELEASE_TAG: ${{ needs.calculate_release.outputs.tag }}
+        if: ${{ github.event_name == 'push' }}
         run: |
           set -euo pipefail
 
-          [[ "$CALCULATED_COMMIT" == "$GITHUB_SHA" ]] \
-            || { printf 'planned commit %s does not match GITHUB_SHA %s\n' "$CALCULATED_COMMIT" "$GITHUB_SHA" >&2; exit 1; }
-          [[ "$(git rev-parse HEAD)" == "$GITHUB_SHA" ]] \
-            || { printf 'local HEAD does not match GITHUB_SHA %s\n' "$GITHUB_SHA" >&2; exit 1; }
+          [[ "$RELEASE_TARGET_SHA" == "$GITHUB_SHA" ]] \
+            || { printf 'planned target %s does not match GITHUB_SHA %s\n' "$RELEASE_TARGET_SHA" "$GITHUB_SHA" >&2; exit 1; }
           [[ "$RELEASE_TAG" == "v$RELEASE_VERSION" ]] \
             || { printf 'release tag %s does not match release version %s\n' "$RELEASE_TAG" "$RELEASE_VERSION" >&2; exit 1; }
 
@@ -291,17 +470,109 @@ jobs:
             exit 1
           fi
 
-      - name: Publish GitHub release
+      - name: Publish GitHub release assets
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
 
-          asset="dist/AmbientSync-${RELEASE_VERSION}.zip"
-          gh release create "$RELEASE_TAG" "$asset" \
-            --target "$GITHUB_SHA" \
-            --title "AmbientSync $RELEASE_VERSION" \
-            --generate-notes
+          zip_asset="dist/AmbientSync-${RELEASE_VERSION}.zip"
+          dmg_asset="dist/AmbientSync-${RELEASE_VERSION}-arm64.dmg"
+          zip_checksum="${zip_asset}.sha256"
+          dmg_checksum="${dmg_asset}.sha256"
+
+          if [[ "$GITHUB_EVENT_NAME" == push ]]; then
+            gh release create "$RELEASE_TAG" \
+              "$zip_asset" \
+              "$dmg_asset" \
+              "$zip_checksum" \
+              "$dmg_checksum" \
+              --target "$RELEASE_TARGET_SHA" \
+              --title "AmbientSync $RELEASE_VERSION" \
+              --generate-notes
+          else
+            recovery_ref="refs/recovery/ambient-sync/$GITHUB_RUN_ID"
+            cleanup_recovery_ref() {
+              git update-ref -d "$recovery_ref" >/dev/null 2>&1 || true
+            }
+            trap cleanup_recovery_ref EXIT
+
+            # Revalidate immediately before clobbering assets. Fetch into an
+            # isolated ref so the checked-out historical tag is never changed.
+            git fetch --force origin "refs/tags/$RELEASE_TAG:$recovery_ref"
+            remote_target_sha="$(git rev-parse --verify "$recovery_ref^{commit}")"
+            [[ "$remote_target_sha" == "$RELEASE_TARGET_SHA" ]] \
+              || { printf 'remote tag %s targets %s, not release target %s\n' "$RELEASE_TAG" "$remote_target_sha" "$RELEASE_TARGET_SHA" >&2; exit 1; }
+
+            if ! release_tag="$(gh release view "$RELEASE_TAG" --json tagName --template '{{.tagName}}')"; then
+              printf 'GitHub release disappeared before recovery upload: %s\n' "$RELEASE_TAG" >&2
+              exit 1
+            fi
+            release_is_draft="$(gh release view "$RELEASE_TAG" --json isDraft --template '{{.isDraft}}')"
+            release_is_prerelease="$(gh release view "$RELEASE_TAG" --json isPrerelease --template '{{.isPrerelease}}')"
+            [[ "$release_tag" == "$RELEASE_TAG" ]] \
+              || { printf 'GitHub release tag %s does not match recovery tag %s\n' "$release_tag" "$RELEASE_TAG" >&2; exit 1; }
+            [[ "$release_is_draft" == false && "$release_is_prerelease" == false ]] \
+              || { printf 'GitHub release %s is not a published stable release\n' "$RELEASE_TAG" >&2; exit 1; }
+
+            gh release upload "$RELEASE_TAG" \
+              "$zip_asset" \
+              "$dmg_asset" \
+              "$zip_checksum" \
+              "$dmg_checksum" \
+              --clobber
+          fi
+
+      - name: Determine cask update gate
+        id: cask_gate
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+
+          update_cask=true
+          if [[ "$GITHUB_EVENT_NAME" == workflow_dispatch ]]; then
+            stable_tag_pattern='^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$'
+            stable_tags=''
+            # Use same unbounded comparator as Cask-version protection.
+            # shellcheck disable=SC1090 # Manual recovery loads helper from exact workflow revision.
+            source "$SEMVER_HELPER_PATH"
+            if ! stable_tags="$(gh release list \
+              --limit 1000 \
+              --json tagName,isDraft,isPrerelease \
+              --jq '.[] | select(.isDraft == false and .isPrerelease == false) | .tagName')"; then
+              printf '%s\n' 'Unable to determine latest stable release; skipping cask PR for recovered assets.' >&2
+              update_cask=false
+            else
+              latest_stable_tag=''
+              latest_stable_version=''
+
+              while IFS= read -r candidate_tag; do
+                [[ -n "$candidate_tag" ]] || continue
+                [[ "$candidate_tag" =~ $stable_tag_pattern ]] || continue
+                candidate_version="${candidate_tag#v}"
+                if [[ -z "$latest_stable_version" ]] || version_is_greater "$candidate_version" "$latest_stable_version"; then
+                  latest_stable_tag="$candidate_tag"
+                  latest_stable_version="$candidate_version"
+                fi
+              done <<< "$stable_tags"
+
+              if [[ -z "$latest_stable_tag" ]]; then
+                printf '%s\n' 'No stable semantic GitHub release found; skipping cask PR for recovered assets.' >&2
+                update_cask=false
+              elif [[ "$latest_stable_tag" != "$RELEASE_TAG" ]]; then
+                printf 'Recovered release %s is not latest stable release %s; skipping cask PR.\n' \
+                  "$RELEASE_TAG" "$latest_stable_tag" >&2
+                update_cask=false
+              else
+                printf 'Recovered release %s is latest stable release; enabling cask PR.\n' "$RELEASE_TAG"
+              fi
+            fi
+          else
+            printf 'Normal release %s enables cask PR.\n' "$RELEASE_TAG"
+          fi
+
+          printf 'update_cask=%s\n' "$update_cask" >> "$GITHUB_OUTPUT"
 
       - name: Clean up signing material
         if: ${{ always() }}
@@ -321,3 +592,206 @@ jobs:
           if [[ -n "$api_key_path" ]]; then
             rm -f "$api_key_path"
           fi
+
+  cask_update:
+    needs: release
+    if: ${{ needs.release.result == 'success' && needs.release.outputs.update_cask == 'true' }}
+    permissions:
+      contents: write
+      pull-requests: write
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ secrets.RELEASE_PR_TOKEN }}
+      RELEASE_VERSION: ${{ needs.release.outputs.version }}
+      RELEASE_TAG: ${{ needs.release.outputs.tag }}
+      RELEASE_DMG_SHA: ${{ needs.release.outputs.dmg_sha }}
+    steps:
+      - name: Require dedicated cask PR token
+        run: |
+          set -euo pipefail
+          printf '%s\n' 'Cask PR runs after asset publication; failures leave the GitHub release intact.'
+          [[ -n "$GH_TOKEN" ]] || { printf '%s\n' 'RELEASE_PR_TOKEN is required for cask PR automation' >&2; exit 1; }
+
+      - name: Check out main for cask branch base
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          ref: main
+          fetch-depth: 0
+          token: ${{ secrets.RELEASE_PR_TOKEN }}
+
+      - name: Guard against Cask downgrade
+        run: |
+          set -euo pipefail
+
+          cask_path='Casks/ambientsync.rb'
+          stable_version='^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$'
+          cask_update_allowed=true
+          git fetch origin main
+
+          if git cat-file -e "origin/main:$cask_path" 2>/dev/null; then
+            existing_version=''
+            existing_sha=''
+            version_line_pattern='^[[:space:]]*version[[:space:]]+"([0-9]+\.[0-9]+\.[0-9]+)"[[:space:]]*$'
+            sha_line_pattern='^[[:space:]]*sha256[[:space:]]+"([0-9A-Fa-f]{64})"[[:space:]]*$'
+            while IFS= read -r line; do
+              if [[ "$line" =~ $version_line_pattern ]]; then
+                [[ -z "$existing_version" ]] \
+                  || { printf '%s\n' 'origin/main Cask has multiple version stanzas' >&2; exit 1; }
+                existing_version="${BASH_REMATCH[1]}"
+              elif [[ "$line" =~ $sha_line_pattern ]]; then
+                [[ -z "$existing_sha" ]] \
+                  || { printf '%s\n' 'origin/main Cask has multiple sha256 stanzas' >&2; exit 1; }
+                existing_sha="${BASH_REMATCH[1]}"
+              fi
+            done < <(git show "origin/main:$cask_path")
+
+            [[ "$existing_version" =~ $stable_version ]] \
+              || { printf 'origin/main Cask has invalid version: %s\n' "$existing_version" >&2; exit 1; }
+            [[ "$existing_sha" =~ ^[0-9A-Fa-f]{64}$ ]] \
+              || { printf '%s\n' 'origin/main Cask has invalid sha256' >&2; exit 1; }
+
+            # This helper is also sourced by latest-release recovery gating.
+            source "$GITHUB_WORKSPACE/scripts/semver.sh"
+
+            normalized_existing_sha="$(printf '%s' "$existing_sha" | tr '[:upper:]' '[:lower:]')"
+            normalized_release_sha="$(printf '%s' "$RELEASE_DMG_SHA" | tr '[:upper:]' '[:lower:]')"
+            if version_is_greater "$existing_version" "$RELEASE_VERSION"; then
+              printf 'origin/main Cask version %s is newer than release %s; skipping cask PR.\n' \
+                "$existing_version" "$RELEASE_VERSION"
+              cask_update_allowed=false
+            elif [[ "$existing_version" == "$RELEASE_VERSION" && "$normalized_existing_sha" == "$normalized_release_sha" ]]; then
+              printf 'origin/main Cask already matches release %s and DMG SHA; skipping cask PR.\n' "$RELEASE_VERSION"
+              cask_update_allowed=false
+            fi
+          fi
+
+          printf 'CASK_UPDATE_ALLOWED=%s\n' "$cask_update_allowed" >> "$GITHUB_ENV"
+
+      - name: Verify published DMG checksum
+        if: ${{ env.CASK_UPDATE_ALLOWED == 'true' }}
+        run: |
+          set -euo pipefail
+
+          checksum_asset="AmbientSync-${RELEASE_VERSION}-arm64.dmg.sha256"
+          dmg_asset="AmbientSync-${RELEASE_VERSION}-arm64.dmg"
+          checksum_dir="$RUNNER_TEMP/ambient-sync-cask-release"
+          mkdir -p "$checksum_dir"
+          gh release download "$RELEASE_TAG" \
+            --pattern "$checksum_asset" \
+            --dir "$checksum_dir"
+
+          checksum_path="$checksum_dir/$checksum_asset"
+          [[ -s "$checksum_path" ]] || { printf 'published checksum asset missing: %s\n' "$checksum_asset" >&2; exit 1; }
+          published_sha=''
+          published_name=''
+          read -r published_sha published_name < "$checksum_path"
+          normalized_release_sha="$(printf '%s' "$RELEASE_DMG_SHA" | tr '[:upper:]' '[:lower:]')"
+          normalized_published_sha="$(printf '%s' "$published_sha" | tr '[:upper:]' '[:lower:]')"
+          [[ "$normalized_release_sha" =~ ^[0-9a-f]{64}$ ]] || { printf '%s\n' 'release job returned invalid DMG checksum' >&2; exit 1; }
+          [[ "$normalized_published_sha" == "$normalized_release_sha" ]] \
+            || { printf '%s\n' 'published DMG checksum differs from release job checksum' >&2; exit 1; }
+          [[ "$published_name" == "$dmg_asset" ]] \
+            || { printf '%s\n' 'published DMG checksum names unexpected asset' >&2; exit 1; }
+
+          printf 'RELEASE_DMG_SHA=%s\n' "$normalized_published_sha" >> "$GITHUB_ENV"
+
+      - name: Check out or create unique cask update branch
+        if: ${{ env.CASK_UPDATE_ALLOWED == 'true' }}
+        run: |
+          set -euo pipefail
+
+          cask_branch="automation/cask/ambientsync-v${RELEASE_VERSION}"
+          git fetch origin main
+          if git ls-remote --exit-code --heads origin "refs/heads/$cask_branch" >/dev/null 2>&1; then
+            git fetch origin "refs/heads/$cask_branch:refs/remotes/origin/$cask_branch"
+            # Version branches are reusable only when their net diff is cask-only.
+            # Any unrelated branch diff fails closed before automation can edit it.
+            existing_branch_files="$(git diff --name-only "origin/main...origin/$cask_branch")"
+            if [[ -n "$existing_branch_files" && "$existing_branch_files" != Casks/ambientsync.rb ]]; then
+              printf 'existing cask branch contains unrelated diff(s): %s\n' "$existing_branch_files" >&2
+              exit 1
+            fi
+            git switch --track -c "$cask_branch" "origin/$cask_branch"
+          else
+            git switch --create "$cask_branch" origin/main
+          fi
+          printf 'CASK_BRANCH=%s\n' "$cask_branch" >> "$GITHUB_ENV"
+
+      - name: Render exact release cask
+        if: ${{ env.CASK_UPDATE_ALLOWED == 'true' }}
+        run: |
+          set -euo pipefail
+          ./scripts/update-cask.sh "$RELEASE_VERSION" "$RELEASE_DMG_SHA"
+          ruby -c Casks/ambientsync.rb
+
+      - name: Commit and push cask update
+        if: ${{ env.CASK_UPDATE_ALLOWED == 'true' }}
+        run: |
+          set -euo pipefail
+
+          verify_cask_only_diff() {
+            local changed_files
+            changed_files="$(git diff --name-only origin/main...HEAD)"
+            if [[ -n "$changed_files" && "$changed_files" != Casks/ambientsync.rb ]]; then
+              printf 'cask branch final diff contains unrelated file(s): %s\n' "$changed_files" >&2
+              exit 1
+            fi
+          }
+
+          git diff --check
+          git add -- Casks/ambientsync.rb
+          staged_files="$(git diff --cached --name-only)"
+          if [[ -n "$staged_files" && "$staged_files" != Casks/ambientsync.rb ]]; then
+            printf 'unexpected staged files: %s\n' "$staged_files" >&2
+            exit 1
+          fi
+
+          if git diff --cached --quiet -- Casks/ambientsync.rb; then
+            printf 'Cask already matches release %s\n' "$RELEASE_VERSION"
+          else
+            git config user.name 'github-actions[bot]'
+            git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+            git commit -m "chore(cask): update AmbientSync to v${RELEASE_VERSION}"
+            # Plain push only. A concurrent or externally modified branch must fail,
+            # never be replaced with a force push.
+            git push --set-upstream origin "$CASK_BRANCH"
+          fi
+          [[ -z "$(git status --porcelain)" ]] || { printf '%s\n' 'cask branch has unexpected uncommitted changes' >&2; exit 1; }
+          verify_cask_only_diff
+
+      - name: Create or refresh cask pull request
+        if: ${{ env.CASK_UPDATE_ALLOWED == 'true' }}
+        run: |
+          set -euo pipefail
+
+          git fetch origin main
+          git fetch origin "refs/heads/$CASK_BRANCH:refs/remotes/origin/$CASK_BRANCH"
+          local_head_oid="$(git rev-parse HEAD)"
+          remote_head_oid="$(git rev-parse "origin/$CASK_BRANCH")"
+          [[ "$remote_head_oid" == "$local_head_oid" ]] \
+            || { printf 'cask branch drifted before PR operation: remote %s, local %s\n' "$remote_head_oid" "$local_head_oid" >&2; exit 1; }
+          remote_pr_files="$(git diff --name-only "origin/main...origin/$CASK_BRANCH")"
+          [[ "$remote_pr_files" == Casks/ambientsync.rb ]] \
+            || { printf 'remote cask pull request diff must contain exactly Casks/ambientsync.rb, got: %s\n' "$remote_pr_files" >&2; exit 1; }
+
+          pr_title="chore(cask): update AmbientSync to v${RELEASE_VERSION}"
+          pr_body="$(printf 'Automated Homebrew Cask update for release %s.\n\nDMG SHA-256: %s\n\nThis post-publish job is intentionally separate from asset publication; a PR failure does not delete or roll back the GitHub release.\n' "$RELEASE_TAG" "\`$RELEASE_DMG_SHA\`")"
+          pr_number="$(gh pr list --base main --head "$CASK_BRANCH" --state open --json number --jq '.[0].number')"
+
+          if [[ -n "$pr_number" ]]; then
+            gh pr edit "$pr_number" --title "$pr_title" --body "$pr_body"
+            printf 'Refreshed cask pull request #%s\n' "$pr_number"
+          elif git diff --quiet "origin/main...HEAD" -- Casks/ambientsync.rb; then
+            printf 'No cask pull request needed; main already matches release %s\n' "$RELEASE_VERSION"
+          else
+            gh pr create --base main --head "$CASK_BRANCH" --title "$pr_title" --body "$pr_body"
+          fi
+
+          pr_number="$(gh pr list --base main --head "$CASK_BRANCH" --state open --json number --jq '.[0].number')"
+          [[ -n "$pr_number" ]] || { printf 'unable to locate cask pull request after operation\n' >&2; exit 1; }
+          pr_head_oid="$(gh pr view "$pr_number" --json headRefOid --jq '.headRefOid')"
+          pr_files="$(gh pr view "$pr_number" --json files --jq '[.files[].path] | join("\n")')"
+          [[ "$pr_head_oid" == "$local_head_oid" ]] \
+            || { printf 'cask pull request head drifted: remote %s, expected %s\n' "$pr_head_oid" "$local_head_oid" >&2; exit 1; }
+          [[ "$pr_files" == Casks/ambientsync.rb ]] \
+            || { printf 'cask pull request files must contain exactly Casks/ambientsync.rb, got: %s\n' "$pr_files" >&2; exit 1; }

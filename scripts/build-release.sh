@@ -42,7 +42,11 @@ require_env APPLE_API_KEY_PATH
 [[ -r "$APPLE_API_KEY_PATH" ]] || die "APPLE_API_KEY_PATH must point to a readable API key file"
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
-ROOT_DIR="$(cd -- "$SCRIPT_DIR/.." && pwd)"
+if [[ -n "${RELEASE_ROOT_DIR:-}" ]]; then
+    ROOT_DIR="$RELEASE_ROOT_DIR"
+else
+    ROOT_DIR="$(cd -- "$SCRIPT_DIR/.." && pwd)"
+fi
 PROJECT_PATH="$ROOT_DIR/AmbientSync.xcodeproj"
 RELEASE_BUILD_DIR="$ROOT_DIR/.build/release"
 DERIVED_DATA_PATH="$RELEASE_BUILD_DIR/DerivedData"
@@ -50,6 +54,11 @@ PRODUCTS_PATH="$DERIVED_DATA_PATH/Build/Products/Release"
 DIST_PATH="$ROOT_DIR/dist"
 PRE_NOTARY_ZIP="$RELEASE_BUILD_DIR/AmbientSync-${VERSION}.pre-notarization.zip"
 FINAL_ZIP="$DIST_PATH/AmbientSync-${VERSION}.zip"
+FINAL_DMG="$DIST_PATH/AmbientSync-${VERSION}-arm64.dmg"
+ZIP_CHECKSUM="$FINAL_ZIP.sha256"
+DMG_CHECKSUM="$FINAL_DMG.sha256"
+DMG_STAGING_DIR="$RELEASE_BUILD_DIR/dmg-staging"
+DMG_MOUNT_POINT="$RELEASE_BUILD_DIR/dmg-mount"
 NOTARY_SUBMIT_RESPONSE_FILE="$RELEASE_BUILD_DIR/notary-submit-response.json"
 NOTARY_SUBMIT_ERROR_FILE="$RELEASE_BUILD_DIR/notary-submit.stderr"
 NOTARY_SUBMIT_FIELDS_FILE="$RELEASE_BUILD_DIR/notary-submit-fields"
@@ -61,6 +70,8 @@ ENTITLEMENTS_FILE="$RELEASE_BUILD_DIR/AmbientSync.entitlements.plist"
 ENTITLEMENTS_ERROR_FILE="$RELEASE_BUILD_DIR/entitlements.stderr"
 ENTITLEMENTS_LOOKUP_ERROR_FILE="$RELEASE_BUILD_DIR/entitlements-lookup.stderr"
 PLIST_BUDDY='/usr/libexec/PlistBuddy'
+EXPECTED_BUNDLE_IDENTIFIER='cloud.piatkowski.AmbientSync'
+DMG_MOUNT_ATTACHED=false
 
 print_captured_output() {
     local label="$1"
@@ -133,10 +144,11 @@ PY
 }
 
 print_notary_log_diagnostics() {
-    local log_file="$1"
-    local parse_error_file="$2"
+    local artifact_kind="$1"
+    local log_file="$2"
+    local parse_error_file="$3"
 
-    python3 - "$log_file" 2> "$parse_error_file" <<'PY'
+    python3 - "$artifact_kind" "$log_file" 2> "$parse_error_file" <<'PY'
 import json
 import sys
 
@@ -161,7 +173,7 @@ def clean(value):
 
 
 try:
-    with open(sys.argv[1], "rb") as log:
+    with open(sys.argv[2], "rb") as log:
         payload = json.load(log)
 except (OSError, TypeError, UnicodeError, ValueError):
     fail("notarytool log response is not valid JSON")
@@ -169,8 +181,9 @@ except (OSError, TypeError, UnicodeError, ValueError):
 if not isinstance(payload, dict):
     fail("notarytool log response is not a JSON object")
 
-print("status: {}".format(clean(payload.get("status"))))
-print("statusSummary: {}".format(clean(payload.get("statusSummary"))))
+artifact_kind = clean(sys.argv[1])
+print("{} notarization status: {}".format(artifact_kind, clean(payload.get("status"))))
+print("{} notarization summary: {}".format(artifact_kind, clean(payload.get("statusSummary"))))
 
 issues = payload.get("issues", [])
 if issues is None:
@@ -185,7 +198,7 @@ for issue in issues:
     values = [(field, clean(issue[field])) for field in issue_fields if field in issue]
     if not values:
         continue
-    print("issue:")
+    print("{} notarization issue:".format(artifact_kind))
     for field, value in values:
         print("  {}: {}".format(field, value))
 PY
@@ -226,15 +239,179 @@ validate_signed_entitlements() {
     printf 'No com.apple.security.get-task-allow entitlement found; continuing\n'
 }
 
-[[ -d "$PROJECT_PATH" ]] || die "Xcode project not found at $PROJECT_PATH"
+verify_signature_metadata() {
+    local artifact_kind="$1"
+    local artifact_path="$2"
+    local require_runtime="$3"
+    local signature_details=''
 
-for command in xcodebuild codesign ditto lipo spctl xcrun plutil python3; do
-    command -v "$command" >/dev/null 2>&1 || die "required command not found: $command"
-done
-[[ -x "$PLIST_BUDDY" ]] || die "required command not found: $PLIST_BUDDY"
+    if ! signature_details="$(codesign --display --verbose=4 "$artifact_path" 2>&1)"; then
+        die "unable to inspect ${artifact_kind} signature"
+    fi
+    [[ "$signature_details" == *"Authority=$APPLE_SIGNING_IDENTITY"* ]] \
+        || die "${artifact_kind} is not signed with APPLE_SIGNING_IDENTITY"
+    [[ "$signature_details" == *"TeamIdentifier=$APPLE_TEAM_ID"* ]] \
+        || die "${artifact_kind} is not signed for APPLE_TEAM_ID"
+
+    local timestamp_value=''
+    while IFS= read -r signature_line; do
+        if [[ "$signature_line" == Timestamp=* ]]; then
+            timestamp_value="${signature_line#Timestamp=}"
+            break
+        fi
+    done <<< "$signature_details"
+    [[ -n "$timestamp_value" && "$timestamp_value" != none* ]] \
+        || die "${artifact_kind} signature does not contain a secure timestamp"
+
+    if [[ "$require_runtime" == true ]]; then
+        local code_directory_line=''
+        while IFS= read -r signature_line; do
+            if [[ "$signature_line" =~ ^CodeDirectory[[:space:]] ]]; then
+                [[ -z "$code_directory_line" ]] \
+                    || die "${artifact_kind} signature contains multiple CodeDirectory lines"
+                code_directory_line="$signature_line"
+            fi
+        done <<< "$signature_details"
+        [[ -n "$code_directory_line" ]] \
+            || die "${artifact_kind} signature does not contain a CodeDirectory line"
+
+        local code_directory_flags=''
+        local code_directory_flags_pattern='flags=0x[[:xdigit:]]+\(([^)]*)\)'
+        if [[ "$code_directory_line" =~ $code_directory_flags_pattern ]]; then
+            code_directory_flags="${BASH_REMATCH[1]}"
+        fi
+        [[ ",$code_directory_flags," == *,runtime,* ]] \
+            || die "${artifact_kind} signature does not enable hardened runtime"
+    fi
+}
+
+notarize_artifact() {
+    local artifact_kind="$1"
+    local artifact_path="$2"
+
+    rm -f \
+        "$NOTARY_SUBMIT_RESPONSE_FILE" \
+        "$NOTARY_SUBMIT_ERROR_FILE" \
+        "$NOTARY_SUBMIT_FIELDS_FILE" \
+        "$NOTARY_SUBMIT_PARSE_ERROR_FILE" \
+        "$NOTARY_LOG_RESPONSE_FILE" \
+        "$NOTARY_LOG_ERROR_FILE" \
+        "$NOTARY_LOG_PARSE_ERROR_FILE"
+
+    printf 'Submitting %s for notarization\n' "$artifact_kind"
+    local notary_submit_exit_status=0
+    if xcrun notarytool submit "$artifact_path" \
+        --key "$APPLE_API_KEY_PATH" \
+        --key-id "$APPLE_API_KEY_ID" \
+        --issuer "$APPLE_API_ISSUER_ID" \
+        --wait \
+        --timeout 30m \
+        --output-format json \
+        --no-progress \
+        > "$NOTARY_SUBMIT_RESPONSE_FILE" \
+        2> "$NOTARY_SUBMIT_ERROR_FILE"; then
+        notary_submit_exit_status=0
+    else
+        notary_submit_exit_status=$?
+    fi
+
+    if [[ ! -s "$NOTARY_SUBMIT_RESPONSE_FILE" ]]; then
+        print_captured_output "${artifact_kind} notarytool submit stderr:" "$NOTARY_SUBMIT_ERROR_FILE"
+        die "${artifact_kind} notarytool submit returned no JSON response (exit status $notary_submit_exit_status)"
+    fi
+    if ! parse_notary_submission_response \
+        "$NOTARY_SUBMIT_RESPONSE_FILE" \
+        "$NOTARY_SUBMIT_FIELDS_FILE" \
+        "$NOTARY_SUBMIT_PARSE_ERROR_FILE"; then
+        print_captured_output "${artifact_kind} notarytool submit stderr:" "$NOTARY_SUBMIT_ERROR_FILE"
+        print_captured_output "${artifact_kind} notarytool submit JSON parse stderr:" "$NOTARY_SUBMIT_PARSE_ERROR_FILE"
+        die "${artifact_kind} notarytool submit returned empty or malformed JSON (exit status $notary_submit_exit_status)"
+    fi
+
+    local notary_status=''
+    local notary_id=''
+    if ! IFS=$'\t' read -r notary_status notary_id < "$NOTARY_SUBMIT_FIELDS_FILE"; then
+        print_captured_output "${artifact_kind} notarytool submit stderr:" "$NOTARY_SUBMIT_ERROR_FILE"
+        die "unable to read parsed ${artifact_kind} notarytool status and id"
+    fi
+    [[ -n "$notary_status" && -n "$notary_id" ]] \
+        || die "${artifact_kind} notarytool submit response did not contain status and id"
+    [[ "$notary_id" =~ ^[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}$ ]] \
+        || die "${artifact_kind} notarytool submit response id is not a canonical UUID"
+
+    printf '%s notarization status: %s\n' "$artifact_kind" "$notary_status"
+    if (( notary_submit_exit_status != 0 )) || [[ "$notary_status" != Accepted ]]; then
+        print_captured_output "${artifact_kind} notarytool submit stderr:" "$NOTARY_SUBMIT_ERROR_FILE"
+
+        if [[ "$notary_status" != Accepted ]]; then
+            printf 'Fetching %s notarization diagnostics\n' "$artifact_kind" >&2
+            local notary_log_exit_status=0
+            if xcrun notarytool log "$notary_id" \
+                --key "$APPLE_API_KEY_PATH" \
+                --key-id "$APPLE_API_KEY_ID" \
+                --issuer "$APPLE_API_ISSUER_ID" \
+                --output-format json \
+                > "$NOTARY_LOG_RESPONSE_FILE" \
+                2> "$NOTARY_LOG_ERROR_FILE"; then
+                notary_log_exit_status=0
+            else
+                notary_log_exit_status=$?
+            fi
+
+            if (( notary_log_exit_status != 0 )); then
+                print_captured_output "${artifact_kind} notarytool log stderr:" "$NOTARY_LOG_ERROR_FILE"
+                die "unable to fetch ${artifact_kind} notarization diagnostics (exit status $notary_log_exit_status)"
+            fi
+            if [[ ! -s "$NOTARY_LOG_RESPONSE_FILE" ]]; then
+                print_captured_output "${artifact_kind} notarytool log stderr:" "$NOTARY_LOG_ERROR_FILE"
+                die "${artifact_kind} notarytool log returned no JSON response"
+            fi
+            if ! print_notary_log_diagnostics \
+                "$artifact_kind" \
+                "$NOTARY_LOG_RESPONSE_FILE" \
+                "$NOTARY_LOG_PARSE_ERROR_FILE" >&2; then
+                print_captured_output "${artifact_kind} notarytool log stderr:" "$NOTARY_LOG_ERROR_FILE"
+                print_captured_output "${artifact_kind} notarytool log JSON parse stderr:" "$NOTARY_LOG_PARSE_ERROR_FILE"
+                die "${artifact_kind} notarytool log returned malformed JSON"
+            fi
+        fi
+
+        if (( notary_submit_exit_status != 0 )); then
+            die "${artifact_kind} notarytool submit failed before stapling (exit status $notary_submit_exit_status)"
+        fi
+        die "${artifact_kind} notarization was not accepted before stapling"
+    fi
+}
+
+detach_dmg() {
+    [[ "$DMG_MOUNT_ATTACHED" == true ]] || return 0
+
+    local attempt=1
+    for ((attempt = 1; attempt <= 5; attempt++)); do
+        if hdiutil detach "$DMG_MOUNT_POINT" >/dev/null 2>&1; then
+            DMG_MOUNT_ATTACHED=false
+            return 0
+        fi
+        sleep 2
+    done
+
+    printf 'DMG mount remained busy; attempting forced detach\n' >&2
+    if hdiutil detach -force "$DMG_MOUNT_POINT" >/dev/null 2>&1; then
+        DMG_MOUNT_ATTACHED=false
+        return 0
+    fi
+
+    printf 'unable to detach DMG mount at %s\n' "$DMG_MOUNT_POINT" >&2
+    return 1
+}
 
 cleanup() {
-    rm -f \
+    local exit_status=$?
+    set +e
+
+    detach_dmg || true
+    rm -rf \
+        "$DMG_STAGING_DIR" \
         "$PRE_NOTARY_ZIP" \
         "$NOTARY_SUBMIT_RESPONSE_FILE" \
         "$NOTARY_SUBMIT_ERROR_FILE" \
@@ -246,7 +423,22 @@ cleanup() {
         "$ENTITLEMENTS_FILE" \
         "$ENTITLEMENTS_ERROR_FILE" \
         "$ENTITLEMENTS_LOOKUP_ERROR_FILE"
+    if [[ "$DMG_MOUNT_ATTACHED" != true ]]; then
+        rm -rf "$RELEASE_BUILD_DIR"
+    else
+        printf 'Leaving release build directory in place because DMG mount is still attached\n' >&2
+    fi
+
+    exit "$exit_status"
 }
+
+[[ -d "$PROJECT_PATH" ]] || die "Xcode project not found at $PROJECT_PATH"
+
+for command in xcodebuild codesign ditto find hdiutil lipo readlink shasum spctl xcrun plutil python3; do
+    command -v "$command" >/dev/null 2>&1 || die "required command not found: $command"
+done
+[[ -x "$PLIST_BUDDY" ]] || die "required command not found: $PLIST_BUDDY"
+
 trap cleanup EXIT
 
 rm -rf "$RELEASE_BUILD_DIR" "$DIST_PATH"
@@ -286,6 +478,15 @@ done < <(find "$PRODUCTS_PATH" -type d -name AmbientSync.app -print0)
 
 [[ -n "$APP_PATH" ]] || die "AmbientSync.app not found under $PRODUCTS_PATH"
 
+APP_INFO_PLIST="$APP_PATH/Contents/Info.plist"
+[[ -r "$APP_INFO_PLIST" ]] || die "AmbientSync Info.plist not found at $APP_INFO_PLIST"
+APP_BUNDLE_IDENTIFIER=''
+if ! APP_BUNDLE_IDENTIFIER="$("$PLIST_BUDDY" -c 'Print :CFBundleIdentifier' "$APP_INFO_PLIST" 2>/dev/null)"; then
+    die 'unable to read AmbientSync bundle identifier'
+fi
+[[ "$APP_BUNDLE_IDENTIFIER" == "$EXPECTED_BUNDLE_IDENTIFIER" ]] \
+    || die "AmbientSync bundle identifier $APP_BUNDLE_IDENTIFIER does not match $EXPECTED_BUNDLE_IDENTIFIER"
+
 APP_EXECUTABLE="$APP_PATH/Contents/MacOS/AmbientSync"
 [[ -x "$APP_EXECUTABLE" ]] || die "AmbientSync executable not found at $APP_EXECUTABLE"
 [[ "$(lipo -archs "$APP_EXECUTABLE")" == arm64 ]] \
@@ -293,141 +494,117 @@ APP_EXECUTABLE="$APP_PATH/Contents/MacOS/AmbientSync"
 
 printf 'Verifying Developer ID signature before notarization\n'
 codesign --verify --deep --strict --verbose=4 "$APP_PATH"
-SIGNATURE_DETAILS="$(codesign --display --verbose=4 "$APP_PATH" 2>&1)" \
-    || die "unable to inspect AmbientSync.app signature"
-[[ "$SIGNATURE_DETAILS" == *"Authority=$APPLE_SIGNING_IDENTITY"* ]] \
-    || die "AmbientSync.app is not signed with APPLE_SIGNING_IDENTITY"
-[[ "$SIGNATURE_DETAILS" == *"TeamIdentifier=$APPLE_TEAM_ID"* ]] \
-    || die "AmbientSync.app is not signed for APPLE_TEAM_ID"
-
-CODE_DIRECTORY_LINE=''
-while IFS= read -r signature_line; do
-    if [[ "$signature_line" =~ ^CodeDirectory[[:space:]] ]]; then
-        [[ -z "$CODE_DIRECTORY_LINE" ]] \
-            || die "AmbientSync.app signature contains multiple CodeDirectory lines"
-        CODE_DIRECTORY_LINE="$signature_line"
-    fi
-done <<< "$SIGNATURE_DETAILS"
-[[ -n "$CODE_DIRECTORY_LINE" ]] \
-    || die "AmbientSync.app signature does not contain a CodeDirectory line"
-
-CODE_DIRECTORY_FLAGS=''
-CODE_DIRECTORY_FLAGS_PATTERN='flags=0x[[:xdigit:]]+\(([^)]*)\)'
-if [[ "$CODE_DIRECTORY_LINE" =~ $CODE_DIRECTORY_FLAGS_PATTERN ]]; then
-    CODE_DIRECTORY_FLAGS="${BASH_REMATCH[1]}"
-fi
-[[ ",$CODE_DIRECTORY_FLAGS," == *,runtime,* ]] \
-    || die "AmbientSync.app signature does not enable hardened runtime"
-
-TIMESTAMP_VALUE=''
-while IFS= read -r signature_line; do
-    if [[ "$signature_line" == Timestamp=* ]]; then
-        TIMESTAMP_VALUE="${signature_line#Timestamp=}"
-        break
-    fi
-done <<< "$SIGNATURE_DETAILS"
-[[ -n "$TIMESTAMP_VALUE" && "$TIMESTAMP_VALUE" != none* ]] \
-    || die "AmbientSync.app signature does not contain a secure timestamp"
+verify_signature_metadata 'AmbientSync.app' "$APP_PATH" true
 
 printf 'Verifying effective signed entitlements before notarization\n'
 validate_signed_entitlements
 
 printf 'Creating pre-notarization archive\n'
 ditto -c -k --sequesterRsrc --keepParent "$APP_PATH" "$PRE_NOTARY_ZIP"
+notarize_artifact 'app ZIP' "$PRE_NOTARY_ZIP"
 
-printf 'Submitting archive for notarization\n'
-NOTARY_SUBMIT_EXIT_STATUS=0
-if xcrun notarytool submit "$PRE_NOTARY_ZIP" \
-    --key "$APPLE_API_KEY_PATH" \
-    --key-id "$APPLE_API_KEY_ID" \
-    --issuer "$APPLE_API_ISSUER_ID" \
-    --wait \
-    --timeout 30m \
-    --output-format json \
-    --no-progress \
-    > "$NOTARY_SUBMIT_RESPONSE_FILE" \
-    2> "$NOTARY_SUBMIT_ERROR_FILE"; then
-    NOTARY_SUBMIT_EXIT_STATUS=0
-else
-    NOTARY_SUBMIT_EXIT_STATUS=$?
-fi
-
-if [[ ! -s "$NOTARY_SUBMIT_RESPONSE_FILE" ]]; then
-    print_captured_output 'notarytool submit stderr:' "$NOTARY_SUBMIT_ERROR_FILE"
-    die "notarytool submit returned no JSON response (exit status $NOTARY_SUBMIT_EXIT_STATUS)"
-fi
-if ! parse_notary_submission_response \
-    "$NOTARY_SUBMIT_RESPONSE_FILE" \
-    "$NOTARY_SUBMIT_FIELDS_FILE" \
-    "$NOTARY_SUBMIT_PARSE_ERROR_FILE"; then
-    print_captured_output 'notarytool submit stderr:' "$NOTARY_SUBMIT_ERROR_FILE"
-    print_captured_output 'notarytool submit JSON parse stderr:' "$NOTARY_SUBMIT_PARSE_ERROR_FILE"
-    die "notarytool submit returned empty or malformed JSON (exit status $NOTARY_SUBMIT_EXIT_STATUS)"
-fi
-
-NOTARY_STATUS=''
-NOTARY_ID=''
-if ! IFS=$'\t' read -r NOTARY_STATUS NOTARY_ID < "$NOTARY_SUBMIT_FIELDS_FILE"; then
-    print_captured_output 'notarytool submit stderr:' "$NOTARY_SUBMIT_ERROR_FILE"
-    die "unable to read parsed notarytool status and id"
-fi
-[[ -n "$NOTARY_STATUS" && -n "$NOTARY_ID" ]] \
-    || die "notarytool submit response did not contain status and id"
-[[ "$NOTARY_ID" =~ ^[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}$ ]] \
-    || die "notarytool submit response id is not a canonical UUID"
-
-printf 'Notarization status: %s\n' "$NOTARY_STATUS"
-if (( NOTARY_SUBMIT_EXIT_STATUS != 0 )) || [[ "$NOTARY_STATUS" != Accepted ]]; then
-    print_captured_output 'notarytool submit stderr:' "$NOTARY_SUBMIT_ERROR_FILE"
-
-    if [[ "$NOTARY_STATUS" != Accepted ]]; then
-        printf 'Fetching notarization diagnostics\n' >&2
-        NOTARY_LOG_EXIT_STATUS=0
-        if xcrun notarytool log "$NOTARY_ID" \
-            --key "$APPLE_API_KEY_PATH" \
-            --key-id "$APPLE_API_KEY_ID" \
-            --issuer "$APPLE_API_ISSUER_ID" \
-            --output-format json \
-            > "$NOTARY_LOG_RESPONSE_FILE" \
-            2> "$NOTARY_LOG_ERROR_FILE"; then
-            NOTARY_LOG_EXIT_STATUS=0
-        else
-            NOTARY_LOG_EXIT_STATUS=$?
-        fi
-
-        if (( NOTARY_LOG_EXIT_STATUS != 0 )); then
-            print_captured_output 'notarytool log stderr:' "$NOTARY_LOG_ERROR_FILE"
-            die "unable to fetch notarization diagnostics (exit status $NOTARY_LOG_EXIT_STATUS)"
-        fi
-        if [[ ! -s "$NOTARY_LOG_RESPONSE_FILE" ]]; then
-            print_captured_output 'notarytool log stderr:' "$NOTARY_LOG_ERROR_FILE"
-            die "notarytool log returned no JSON response"
-        fi
-        if ! print_notary_log_diagnostics \
-            "$NOTARY_LOG_RESPONSE_FILE" \
-            "$NOTARY_LOG_PARSE_ERROR_FILE" >&2; then
-            print_captured_output 'notarytool log stderr:' "$NOTARY_LOG_ERROR_FILE"
-            print_captured_output 'notarytool log JSON parse stderr:' "$NOTARY_LOG_PARSE_ERROR_FILE"
-            die "notarytool log returned malformed JSON"
-        fi
-    fi
-
-    if (( NOTARY_SUBMIT_EXIT_STATUS != 0 )); then
-        die "notarytool submit failed before stapling (exit status $NOTARY_SUBMIT_EXIT_STATUS)"
-    fi
-    die "notarization was not accepted before stapling"
-fi
-
-printf 'Stapling notarization ticket\n'
+printf 'Stapling app notarization ticket\n'
 xcrun stapler staple -v "$APP_PATH"
 xcrun stapler validate -v "$APP_PATH"
 
-rm -f "$PRE_NOTARY_ZIP"
+printf 'Performing final app signature and Gatekeeper checks\n'
+codesign --verify --deep --strict --verbose=4 "$APP_PATH"
+verify_signature_metadata 'AmbientSync.app' "$APP_PATH" true
+spctl --assess --type execute --verbose=4 "$APP_PATH"
+
+printf 'Creating final ZIP archive\n'
 ditto -c -k --sequesterRsrc --keepParent "$APP_PATH" "$FINAL_ZIP"
 [[ -f "$FINAL_ZIP" ]] || die "final archive was not created at $FINAL_ZIP"
 
-printf 'Performing final signature and Gatekeeper checks\n'
-codesign --verify --deep --strict --verbose=4 "$APP_PATH"
-spctl --assess --type execute --verbose=4 "$APP_PATH"
+printf 'Staging plain AmbientSync DMG\n'
+mkdir -p "$DMG_STAGING_DIR"
+ditto "$APP_PATH" "$DMG_STAGING_DIR/AmbientSync.app"
+ln -s /Applications "$DMG_STAGING_DIR/Applications"
+
+printf 'Creating compressed read-only UDZO DMG\n'
+hdiutil create \
+    -volname AmbientSync \
+    -srcfolder "$DMG_STAGING_DIR" \
+    -format UDZO \
+    -ov \
+    "$FINAL_DMG"
+
+printf 'Signing DMG with secure timestamp\n'
+codesign --force --sign "$APPLE_SIGNING_IDENTITY" --timestamp "$FINAL_DMG"
+codesign --verify --strict --verbose=4 "$FINAL_DMG"
+verify_signature_metadata 'DMG' "$FINAL_DMG" false
+notarize_artifact 'DMG' "$FINAL_DMG"
+
+printf 'Stapling DMG notarization ticket\n'
+xcrun stapler staple -v "$FINAL_DMG"
+xcrun stapler validate -v "$FINAL_DMG"
+
+printf 'Verifying final DMG container\n'
+hdiutil verify "$FINAL_DMG"
+codesign --verify --strict --verbose=4 "$FINAL_DMG"
+verify_signature_metadata 'DMG' "$FINAL_DMG" false
+spctl -a -t open --context context:primary-signature -vv "$FINAL_DMG"
+
+printf 'Mounting DMG for read-only contents verification\n'
+mkdir -p "$DMG_MOUNT_POINT"
+hdiutil attach \
+    -readonly \
+    -nobrowse \
+    -noautoopen \
+    -mountpoint "$DMG_MOUNT_POINT" \
+    "$FINAL_DMG" \
+    >/dev/null
+DMG_MOUNT_ATTACHED=true
+
+found_app=false
+found_applications=false
+while IFS= read -r -d '' entry; do
+    entry_name="${entry##*/}"
+    case "$entry_name" in
+        AmbientSync.app)
+            [[ "$found_app" == false ]] || die 'DMG contains duplicate AmbientSync.app root entries'
+            found_app=true
+            ;;
+        Applications)
+            [[ "$found_applications" == false ]] || die 'DMG contains duplicate Applications root entries'
+            found_applications=true
+            ;;
+        .DS_Store|.Trashes|.fseventsd|.vol|.VolumeIcon.icns|.metadata_never_index)
+            printf 'Tolerating explicit DMG filesystem metadata: %s\n' "$entry_name"
+            ;;
+        *)
+            die "DMG contains unexpected root entry: $entry_name"
+            ;;
+    esac
+done < <(find "$DMG_MOUNT_POINT" -mindepth 1 -maxdepth 1 -print0)
+
+[[ "$found_app" == true ]] || die 'DMG is missing AmbientSync.app at root'
+[[ "$found_applications" == true ]] || die 'DMG is missing Applications symlink at root'
+[[ -d "$DMG_MOUNT_POINT/AmbientSync.app" && ! -L "$DMG_MOUNT_POINT/AmbientSync.app" ]] \
+    || die 'DMG AmbientSync.app root entry is not a bundle directory'
+[[ -L "$DMG_MOUNT_POINT/Applications" ]] || die 'DMG Applications root entry is not a symlink'
+[[ "$(readlink "$DMG_MOUNT_POINT/Applications")" == /Applications ]] \
+    || die 'DMG Applications symlink does not target /Applications'
+
+MOUNTED_APP_PATH="$DMG_MOUNT_POINT/AmbientSync.app"
+MOUNTED_APP_EXECUTABLE="$MOUNTED_APP_PATH/Contents/MacOS/AmbientSync"
+[[ -x "$MOUNTED_APP_EXECUTABLE" ]] || die 'mounted DMG app executable is missing'
+[[ "$(lipo -archs "$MOUNTED_APP_EXECUTABLE")" == arm64 ]] \
+    || die 'mounted DMG app is not arm64-only'
+codesign --verify --deep --strict --verbose=4 "$MOUNTED_APP_PATH"
+xcrun stapler validate -v "$MOUNTED_APP_PATH"
+spctl -a -t exec -vv "$MOUNTED_APP_PATH"
+
+detach_dmg || die 'unable to detach DMG before publishing'
+[[ "$DMG_MOUNT_ATTACHED" == false ]] || die 'DMG mount is still attached before publishing'
+
+printf 'Writing SHA-256 checksum assets\n'
+(cd "$DIST_PATH" && shasum -a 256 "$(basename "$FINAL_ZIP")" > "$(basename "$ZIP_CHECKSUM")")
+(cd "$DIST_PATH" && shasum -a 256 "$(basename "$FINAL_DMG")" > "$(basename "$DMG_CHECKSUM")")
+[[ -s "$ZIP_CHECKSUM" ]] || die "ZIP checksum asset was not created at $ZIP_CHECKSUM"
+[[ -s "$DMG_CHECKSUM" ]] || die "DMG checksum asset was not created at $DMG_CHECKSUM"
 
 printf 'Release asset: %s\n' "$FINAL_ZIP"
+printf 'Release asset: %s\n' "$FINAL_DMG"
+printf 'Release checksum: %s\n' "$ZIP_CHECKSUM"
+printf 'Release checksum: %s\n' "$DMG_CHECKSUM"
