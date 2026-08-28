@@ -33,8 +33,8 @@ cleanup() {
 }
 trap cleanup EXIT
 
-mkdir -p "$CASK_DIRECTORY"
 umask 022
+mkdir -p "$CASK_DIRECTORY"
 {
     printf 'cask "ambientsync" do\n'
     printf '  version "%s"\n' "$VERSION"

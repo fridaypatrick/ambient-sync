@@ -289,6 +289,9 @@ notarize_artifact() {
     local artifact_kind="$1"
     local artifact_path="$2"
 
+    [[ -s "$artifact_path" ]] \
+        || die "${artifact_kind} artifact is missing or empty: $artifact_path"
+
     rm -f \
         "$NOTARY_SUBMIT_RESPONSE_FILE" \
         "$NOTARY_SUBMIT_ERROR_FILE" \

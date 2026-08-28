@@ -175,6 +175,15 @@ jobs:
       version: ${{ steps.validate.outputs.version }}
       target_sha: ${{ steps.validate.outputs.target_sha }}
     steps:
+      - name: Require manual recovery dispatch from main
+        env:
+          DISPATCH_REF: ${{ github.ref }}
+        run: |
+          set -euo pipefail
+
+          [[ "$DISPATCH_REF" == 'refs/heads/main' ]] \
+            || { printf 'Manual recovery must be dispatched from refs/heads/main; select main as the workflow ref and retry.\n' >&2; exit 1; }
+
       - name: Check out repository metadata
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
