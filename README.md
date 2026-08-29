@@ -2,12 +2,31 @@
 
 AmbientSync is a native macOS menu-bar app that polls built-in display brightness, maps it per display to supported DDC/CI external displays, and switches system Light/Dark appearance at configured thresholds.
 
-This is a source-only project. Current support:
+Current support:
 
 - Apple silicon
 - macOS 26
 - Xcode 26.6 (17F113)
 - Bundled macOS 26.5 SDK
+
+## Installation
+
+AmbientSync requires Apple silicon and macOS 26 or newer.
+
+### Homebrew Cask
+
+After the release workflow successfully updates `main`, the cask is available from this repository tap:
+
+```sh
+brew tap fridaypatrick/ambient-sync https://github.com/fridaypatrick/ambient-sync.git
+brew install --cask fridaypatrick/ambient-sync/ambientsync
+```
+
+### GitHub Releases DMG
+
+Download the latest [GitHub Release](https://github.com/fridaypatrick/ambient-sync/releases) and select `AmbientSync-<version>-arm64.dmg`. Open the DMG, drag AmbientSync to **Applications**, eject the disk image, and launch AmbientSync from Applications, Finder, Spotlight, or Launchpad.
+
+Published DMG releases are signed and notarized; no `xattr` or Gatekeeper bypass is required.
 
 ## Implemented scope
 
