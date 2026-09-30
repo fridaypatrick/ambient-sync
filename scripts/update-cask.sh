@@ -37,13 +37,13 @@ umask 022
 mkdir -p "$CASK_DIRECTORY"
 {
     printf 'cask "ambientsync" do\n'
+    printf '  arch arm: "arm64"\n\n'
     printf '  version "%s"\n' "$VERSION"
     printf '  sha256 "%s"\n\n' "$NORMALIZED_DMG_SHA256"
     printf '%s\n' "$EXPECTED_URL"
     printf '  name "AmbientSync"\n'
     printf '  desc "Synchronizes ambient display brightness and appearance"\n'
     printf '  homepage "https://github.com/fridaypatrick/ambient-sync"\n\n'
-    printf '  arch arm: "arm64"\n'
     printf '  depends_on arch: :arm64\n'
     printf '  depends_on macos: :tahoe\n\n'
     printf '  # CFBundleIdentifier: cloud.piatkowski.AmbientSync\n'

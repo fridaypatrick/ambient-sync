@@ -2,12 +2,11 @@
 
 AmbientSync is a native macOS menu-bar app that polls built-in display brightness, maps it per display to supported DDC/CI external displays, and switches system Light/Dark appearance at configured thresholds.
 
-Current support:
+Compatibility and development:
 
 - Apple silicon
-- macOS 26
-- Xcode 26.6 (17F113)
-- Bundled macOS 26.5 SDK
+- macOS 26 or newer, including full compatibility with macOS 27
+- Xcode 27 for development; the existing CI environment uses Xcode 26.6 (17F113) and its bundled macOS 26.5 SDK
 
 ## Installation
 
@@ -15,11 +14,10 @@ AmbientSync requires Apple silicon and macOS 26 or newer.
 
 ### Homebrew Cask
 
-After the release workflow successfully updates `main`, the cask is available from this repository tap:
+Install from the public [Homebrew tap](https://github.com/fridaypatrick/homebrew-tap):
 
 ```sh
-brew tap fridaypatrick/ambient-sync https://github.com/fridaypatrick/ambient-sync.git
-brew install --cask fridaypatrick/ambient-sync/ambientsync
+brew install --cask fridaypatrick/tap/ambientsync
 ```
 
 ### GitHub Releases DMG
@@ -89,6 +87,14 @@ DDC/CI support varies by display, adapter, and connection. Private APIs, hot-plu
 ## GitHub Actions
 
 GitHub Actions performs source build and unit-test validation only on `macos-26`, using Xcode 26.6. It selects the bundled macOS 26.5 SDK and uses the same arm64, no-signing commands above. CI does not prove physical display behavior, DDC/CI operation, hot-plug or wake recovery, or private-API runtime behavior.
+
+### Homebrew tap publishing setup
+
+Maintainers must create a fine-grained GitHub personal access token scoped only to [`fridaypatrick/homebrew-tap`](https://github.com/fridaypatrick/homebrew-tap), with **Contents: Read and write** repository permission. Store it in the AmbientSync app repository under **Settings → Secrets and variables → Actions** as the repository secret `HOMEBREW_TAP_TOKEN`. The app repository's built-in `GITHUB_TOKEN` cannot push to the separate tap repository.
+
+Choose an expiration date and rotate the token before it expires. Replace `HOMEBREW_TAP_TOKEN` with the replacement token when rotating. The tap repository's branch protection and rulesets must permit ordinary pushes by the token's owner to its default branch.
+
+The release workflow updates the tap after publishing the GitHub release. A missing or expired token, insufficient permissions, or branch rules that block the push cause the cask update to fail; the GitHub release remains published. Users can still install the published DMG from GitHub Releases.
 
 ## Hardware smoke checklist
 
