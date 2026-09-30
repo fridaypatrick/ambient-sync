@@ -44,13 +44,13 @@ jobs:
       bump_type: ${{ steps.classify.outputs.bump_type }}
     steps:
       - name: Check out full history
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
 
       - name: Calculate semantic version
         id: version
-        uses: PaulHatch/semantic-version@a8f8f59fd7f0625188492e945240f12d7ad2dca3
+        uses: PaulHatch/semantic-version@502226b17e3e242e4befd0a45690fcbb27dd1373
         with:
           branch: HEAD
           tag_prefix: v
@@ -185,7 +185,7 @@ jobs:
             || { printf 'Manual recovery must be dispatched from refs/heads/main; select main as the workflow ref and retry.\n' >&2; exit 1; }
 
       - name: Check out repository metadata
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
 
@@ -267,7 +267,7 @@ jobs:
       update_cask: ${{ steps.cask_gate.outputs.update_cask }}
     steps:
       - name: Check out exact release target
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.event_name == 'workflow_dispatch' && needs.validate_manual_recovery.outputs.tag || github.sha }}
           fetch-depth: 0
@@ -622,8 +622,8 @@ jobs:
         env:
           HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
 
-      - name: Check out app automation
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - name: Check out current main for cask update
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: main
           fetch-depth: 0
