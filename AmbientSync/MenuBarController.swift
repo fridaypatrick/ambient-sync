@@ -36,11 +36,10 @@ final class MenuBarController: NSObject {
 
         let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
         if let button = item.button {
-            let image = NSImage(
-                systemSymbolName: "sun.max.fill",
-                accessibilityDescription: "AmbientSync"
-            )
+            let image = NSImage(named: "MenuBarIcon")
+            image?.accessibilityDescription = "AmbientSync"
             image?.isTemplate = true
+            image?.size = NSSize(width: 18, height: 18)
             button.image = image
             button.toolTip = "AmbientSync"
             button.setAccessibilityLabel("AmbientSync menu")

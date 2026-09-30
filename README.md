@@ -1,5 +1,10 @@
 # AmbientSync — macOS brightness sync and automatic Dark Mode
 
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/assets/branding/logo-dark.svg">
+  <img src="docs/assets/branding/logo-light.svg" width="400" alt="AmbientSync">
+</picture>
+
 AmbientSync is a native macOS menu-bar app that syncs supported DDC/CI external monitor brightness to your built-in display brightness, with adjustable mapping for each display. It also automatically switches system Light/Dark appearance at configured brightness thresholds.
 
 Compatibility and development:
@@ -38,6 +43,12 @@ Published DMG releases are signed and notarized; no `xattr` or Gatekeeper bypass
 Per-display mappings use stable display identities when available. First-run defaults are 0–100% external mapping, Dark at 25%, Light at 40%, brightness synchronization enabled, menu icon visible, and Launch at Login disabled.
 
 Displays whose VCP brightness reads fail are included only when their private IOAVService match is high-confidence. AmbientSync labels these controls **unverified (write-only)** and uses a persisted assumed VCP maximum of 100 by default; Settings supports 100, 255, or a custom maximum from 1 through 65535. Three consecutive transport write failures pause that display until re-enumeration or explicit Retry. Discovery and lifecycle rebuilds do not issue brightness writes.
+
+## Screenshot
+
+<img src="docs/assets/settings-screenshot.png" width="720" alt="AmbientSync settings showing brightness synchronization, Light/Dark thresholds, and external display controls">
+
+Illustrative settings; display status depends on hardware, and Launch at Login availability depends on the app installation. This example shows an unverified (write-only) external display and unavailable Launch at Login, not verification of all displays.
 
 ## FAQ
 
