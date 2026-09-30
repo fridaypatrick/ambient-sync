@@ -606,7 +606,7 @@ jobs:
     needs: release
     if: ${{ needs.release.result == 'success' && needs.release.outputs.update_cask == 'true' }}
     permissions:
-      contents: write
+      contents: read
     runs-on: ubuntu-latest
     env:
       GH_TOKEN: ${{ github.token }}
@@ -617,27 +617,46 @@ jobs:
       - name: Announce post-release cask update
         run: |
           set -euo pipefail
-          printf '%s\n' 'Cask direct commit runs after asset publication; failures leave the GitHub release intact.'
-          [[ -n "$GH_TOKEN" ]] || { printf '%s\n' 'GITHUB_TOKEN is required for direct cask commit automation' >&2; exit 1; }
+          printf '%s\n' 'External tap update runs after asset publication; failures leave the GitHub release intact.'
+          [[ -n "$HOMEBREW_TAP_TOKEN" ]] || { printf '%s\n' 'HOMEBREW_TAP_TOKEN is required with contents read/write access to fridaypatrick/homebrew-tap' >&2; exit 1; }
+        env:
+          HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
 
       - name: Check out current main for cask update
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: main
           fetch-depth: 0
+          persist-credentials: false
+
+      - name: Check out external tap default branch
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          repository: fridaypatrick/homebrew-tap
+          path: homebrew-tap
+          fetch-depth: 0
           persist-credentials: true
-          token: ${{ github.token }}
+          token: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+
+      - name: Record tap default branch
+        working-directory: homebrew-tap
+        run: |
+          set -euo pipefail
+          tap_branch="$(git symbolic-ref --short HEAD)"
+          git check-ref-format "refs/heads/$tap_branch"
+          printf 'TAP_BRANCH=%s\n' "$tap_branch" >> "$GITHUB_ENV"
 
       - name: Guard against Cask downgrade
+        working-directory: homebrew-tap
         run: |
           set -euo pipefail
 
           cask_path='Casks/ambientsync.rb'
           stable_version='^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$'
           cask_update_allowed=true
-          git fetch origin main
+          git fetch origin "$TAP_BRANCH"
 
-          if git cat-file -e "origin/main:$cask_path" 2>/dev/null; then
+          if git cat-file -e "origin/$TAP_BRANCH:$cask_path" 2>/dev/null; then
             existing_version=''
             existing_sha=''
             version_line_pattern='^[[:space:]]*version[[:space:]]+"([0-9]+\.[0-9]+\.[0-9]+)"[[:space:]]*$'
@@ -645,19 +664,19 @@ jobs:
             while IFS= read -r line; do
               if [[ "$line" =~ $version_line_pattern ]]; then
                 [[ -z "$existing_version" ]] \
-                  || { printf '%s\n' 'origin/main Cask has multiple version stanzas' >&2; exit 1; }
+                  || { printf '%s\n' 'Tap Cask has multiple version stanzas' >&2; exit 1; }
                 existing_version="${BASH_REMATCH[1]}"
               elif [[ "$line" =~ $sha_line_pattern ]]; then
                 [[ -z "$existing_sha" ]] \
-                  || { printf '%s\n' 'origin/main Cask has multiple sha256 stanzas' >&2; exit 1; }
+                  || { printf '%s\n' 'Tap Cask has multiple sha256 stanzas' >&2; exit 1; }
                 existing_sha="${BASH_REMATCH[1]}"
               fi
-            done < <(git show "origin/main:$cask_path")
+            done < <(git show "origin/$TAP_BRANCH:$cask_path")
 
             [[ "$existing_version" =~ $stable_version ]] \
-              || { printf 'origin/main Cask has invalid version: %s\n' "$existing_version" >&2; exit 1; }
+              || { printf 'Tap Cask has invalid version: %s\n' "$existing_version" >&2; exit 1; }
             [[ "$existing_sha" =~ ^[0-9A-Fa-f]{64}$ ]] \
-              || { printf '%s\n' 'origin/main Cask has invalid sha256' >&2; exit 1; }
+              || { printf '%s\n' 'Tap Cask has invalid sha256' >&2; exit 1; }
 
             # This helper is also sourced by latest-release recovery gating.
             # shellcheck disable=SC1090,SC1091 # Workflow checkout supplies helper path.
@@ -666,11 +685,11 @@ jobs:
             normalized_existing_sha="$(printf '%s' "$existing_sha" | tr '[:upper:]' '[:lower:]')"
             normalized_release_sha="$(printf '%s' "$RELEASE_DMG_SHA" | tr '[:upper:]' '[:lower:]')"
             if version_is_greater "$existing_version" "$RELEASE_VERSION"; then
-              printf 'origin/main Cask version %s is newer than release %s; skipping cask update.\n' \
+              printf 'Tap Cask version %s is newer than release %s; skipping cask update.\n' \
                 "$existing_version" "$RELEASE_VERSION"
               cask_update_allowed=false
             elif [[ "$existing_version" == "$RELEASE_VERSION" && "$normalized_existing_sha" == "$normalized_release_sha" ]]; then
-              printf 'origin/main Cask already matches release %s and DMG SHA; skipping cask update.\n' "$RELEASE_VERSION"
+              printf 'Tap Cask already matches release %s and DMG SHA; skipping cask update.\n' "$RELEASE_VERSION"
               cask_update_allowed=false
             fi
           fi
@@ -687,6 +706,7 @@ jobs:
           checksum_dir="$RUNNER_TEMP/ambient-sync-cask-release"
           mkdir -p "$checksum_dir"
           gh release download "$RELEASE_TAG" \
+            --repo fridaypatrick/ambient-sync \
             --pattern "$checksum_asset" \
             --dir "$checksum_dir"
 
@@ -705,7 +725,8 @@ jobs:
 
           printf 'RELEASE_DMG_SHA=%s\n' "$normalized_published_sha" >> "$GITHUB_ENV"
 
-      - name: Render and commit cask update on main
+      - name: Render and commit external tap cask update
+        working-directory: homebrew-tap
         if: ${{ env.CASK_UPDATE_ALLOWED == 'true' }}
         run: |
           set -euo pipefail
@@ -714,7 +735,7 @@ jobs:
           stable_version='^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$'
           max_attempts=3
 
-          # Recheck every fetched main before rendering. A newer concurrent Cask
+          # Recheck every fetched tap default branch before rendering. A newer concurrent Cask
           # must win; this job never downgrades it.
           # shellcheck disable=SC1090,SC1091 # Workflow checkout supplies helper path.
           source "$GITHUB_WORKSPACE/scripts/semver.sh"
@@ -727,32 +748,32 @@ jobs:
             local sha_line_pattern='^[[:space:]]*sha256[[:space:]]+"([0-9A-Fa-f]{64})"[[:space:]]*$'
 
             cask_update_allowed_for_base=true
-            if git cat-file -e "origin/main:$cask_path" 2>/dev/null; then
+            if git cat-file -e "origin/$TAP_BRANCH:$cask_path" 2>/dev/null; then
               while IFS= read -r line; do
                 if [[ "$line" =~ $version_line_pattern ]]; then
                   [[ -z "$existing_version" ]] \
-                    || { printf '%s\n' 'origin/main Cask has multiple version stanzas' >&2; exit 1; }
+                    || { printf '%s\n' 'Tap Cask has multiple version stanzas' >&2; exit 1; }
                   existing_version="${BASH_REMATCH[1]}"
                 elif [[ "$line" =~ $sha_line_pattern ]]; then
                   [[ -z "$existing_sha" ]] \
-                    || { printf '%s\n' 'origin/main Cask has multiple sha256 stanzas' >&2; exit 1; }
+                    || { printf '%s\n' 'Tap Cask has multiple sha256 stanzas' >&2; exit 1; }
                   existing_sha="${BASH_REMATCH[1]}"
                 fi
-              done < <(git show "origin/main:$cask_path")
+              done < <(git show "origin/$TAP_BRANCH:$cask_path")
 
               [[ "$existing_version" =~ $stable_version ]] \
-                || { printf 'origin/main Cask has invalid version: %s\n' "$existing_version" >&2; exit 1; }
+                || { printf 'Tap Cask has invalid version: %s\n' "$existing_version" >&2; exit 1; }
               [[ "$existing_sha" =~ ^[0-9A-Fa-f]{64}$ ]] \
-                || { printf '%s\n' 'origin/main Cask has invalid sha256' >&2; exit 1; }
+                || { printf '%s\n' 'Tap Cask has invalid sha256' >&2; exit 1; }
 
               normalized_existing_sha="$(printf '%s' "$existing_sha" | tr '[:upper:]' '[:lower:]')"
               normalized_release_sha="$(printf '%s' "$RELEASE_DMG_SHA" | tr '[:upper:]' '[:lower:]')"
               if version_is_greater "$existing_version" "$RELEASE_VERSION"; then
-                printf 'origin/main Cask version %s is newer than release %s; skipping cask update.\n' \
+                printf 'Tap Cask version %s is newer than release %s; skipping cask update.\n' \
                   "$existing_version" "$RELEASE_VERSION"
                 cask_update_allowed_for_base=false
               elif [[ "$existing_version" == "$RELEASE_VERSION" && "$normalized_existing_sha" == "$normalized_release_sha" ]]; then
-                printf 'origin/main Cask already matches release %s and DMG SHA; skipping cask update.\n' "$RELEASE_VERSION"
+                printf 'Tap Cask already matches release %s and DMG SHA; skipping cask update.\n' "$RELEASE_VERSION"
                 cask_update_allowed_for_base=false
               fi
             fi
@@ -773,20 +794,20 @@ jobs:
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
 
           for (( attempt = 1; attempt <= max_attempts; attempt++ )); do
-            git fetch --no-tags origin main
-            base_oid="$(git rev-parse --verify origin/main)"
+            git fetch --no-tags origin "$TAP_BRANCH"
+            base_oid="$(git rev-parse --verify "origin/$TAP_BRANCH")"
             [[ -z "$(git status --porcelain --untracked-files=all)" ]] \
               || { printf '%s\n' 'cask update checkout has unexpected changes before reset' >&2; exit 1; }
             git reset --hard "$base_oid"
             [[ "$(git rev-parse HEAD)" == "$base_oid" ]] \
-              || { printf 'working base %s does not match fetched origin/main %s\n' "$(git rev-parse HEAD)" "$base_oid" >&2; exit 1; }
+              || { printf 'working base %s does not match fetched tap base %s\n' "$(git rev-parse HEAD)" "$base_oid" >&2; exit 1; }
 
             check_cask_update_allowed
             if [[ "$cask_update_allowed_for_base" != true ]]; then
               exit 0
             fi
 
-            ./scripts/update-cask.sh "$RELEASE_VERSION" "$RELEASE_DMG_SHA"
+            CASK_OUTPUT_PATH="$PWD/$cask_path" "$GITHUB_WORKSPACE/scripts/update-cask.sh" "$RELEASE_VERSION" "$RELEASE_DMG_SHA"
             ruby -c "$cask_path"
             changed_files="$(git diff --name-only "$base_oid" --)"
             [[ -z "$changed_files" || "$changed_files" == "$cask_path" ]] \
@@ -800,7 +821,7 @@ jobs:
               || { printf 'unexpected staged files: %s\n' "$staged_files" >&2; exit 1; }
 
             if git diff --cached --quiet -- "$cask_path"; then
-              printf 'origin/main already contains exact generated Cask for release %s; no commit needed.\n' "$RELEASE_VERSION"
+              printf 'Tap already contains exact generated Cask for release %s; no commit needed.\n' "$RELEASE_VERSION"
               exit 0
             fi
 
@@ -809,32 +830,32 @@ jobs:
             git commit -m "ci: update Homebrew cask to ${RELEASE_VERSION}"
             commit_oid="$(git rev-parse HEAD)"
             [[ "$(git rev-parse HEAD^)" == "$base_oid" ]] \
-              || { printf 'cask commit parent does not match fetched origin/main %s\n' "$base_oid" >&2; exit 1; }
+              || { printf 'cask commit parent does not match fetched tap base %s\n' "$base_oid" >&2; exit 1; }
             commit_files="$(git diff-tree --no-commit-id --name-only -r "$commit_oid")"
             [[ "$commit_files" == "$cask_path" ]] \
               || { printf 'cask commit must change exactly %s, got: %s\n' "$cask_path" "$commit_files" >&2; exit 1; }
             [[ -z "$(git status --porcelain --untracked-files=all)" ]] \
               || { printf '%s\n' 'cask commit left unexpected uncommitted changes' >&2; exit 1; }
 
-            # Normal fast-forward only. Concurrent main movement causes push
+            # Normal fast-forward only. Concurrent tap branch movement causes push
             # rejection, then next attempt fetches, resets, and renders again.
-            if git push origin "HEAD:main"; then
-              printf 'Committed cask update %s to main at %s\n' "$RELEASE_VERSION" "$commit_oid"
+            if git push origin "HEAD:refs/heads/$TAP_BRANCH"; then
+              printf 'Committed cask update %s to tap branch %s at %s\n' "$RELEASE_VERSION" "$TAP_BRANCH" "$commit_oid"
               exit 0
             else
               push_status=$?
             fi
-            printf 'Direct cask commit push failed on attempt %d/%d. If branch rules rejected it, they must allow github-actions[bot]/Actions App direct contents writes; no force push or bypass was attempted.\n' \
+            printf 'External tap push failed on attempt %d/%d. Check HOMEBREW_TAP_TOKEN contents write access and tap branch rules for its owner; no force push or bypass was attempted.\n' \
               "$attempt" "$max_attempts" >&2
             if (( attempt == max_attempts )); then
               if [[ -n "${GITHUB_STEP_SUMMARY:-}" ]]; then
                 {
                   printf '## Homebrew cask direct commit failed\n\n'
                   printf '%s\n' '- Release assets were already published; no release rollback was attempted.'
-                  printf '%s\n' '- Direct push requires branch rules to allow github-actions[bot] / Actions App contents writes.'
+                  printf '%s\n' '- External tap push requires HOMEBREW_TAP_TOKEN contents write access and branch rules permitting its owner to push.'
                 } >> "$GITHUB_STEP_SUMMARY"
               fi
               exit "$push_status"
             fi
-            printf 'Retrying cask update from latest origin/main.\n' >&2
+            printf 'Retrying cask update from latest tap default branch.\n' >&2
           done
