@@ -1,6 +1,11 @@
-# AmbientSync
+# AmbientSync — macOS brightness sync and automatic Dark Mode
 
-AmbientSync is a native macOS menu-bar app that polls built-in display brightness, maps it per display to supported DDC/CI external displays, and switches system Light/Dark appearance at configured thresholds.
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/assets/branding/logo-dark.svg">
+  <img src="docs/assets/branding/logo-light.svg" width="400" alt="AmbientSync">
+</picture>
+
+AmbientSync is a native macOS menu-bar app that syncs supported DDC/CI external monitor brightness to your built-in display brightness, with adjustable mapping for each display. It also automatically switches system Light/Dark appearance at configured brightness thresholds.
 
 Compatibility and development:
 
@@ -26,18 +31,38 @@ Download the latest [GitHub Release](https://github.com/fridaypatrick/ambient-sy
 
 Published DMG releases are signed and notarized; no `xattr` or Gatekeeper bypass is required.
 
-## Implemented scope
+## Features
 
-- Built-in brightness polling
-- DDC/CI external mapping per display
-- Thresholds/hysteresis appearance switching
-- Launch at Login
-- Hideable menu icon/relaunch recovery
-- Settings persistence
+- Keep external brightness in sync as built-in display brightness changes.
+- Adjust brightness mapping separately for each supported DDC/CI external display.
+- Switch system Light/Dark appearance at separate brightness thresholds, with hysteresis to prevent repeated switching near a threshold.
+- Start AmbientSync automatically with Launch at Login.
+- Hide the menu-bar icon and reopen the app to recover access to Settings.
+- Keep your settings between launches.
 
 Per-display mappings use stable display identities when available. First-run defaults are 0–100% external mapping, Dark at 25%, Light at 40%, brightness synchronization enabled, menu icon visible, and Launch at Login disabled.
 
 Displays whose VCP brightness reads fail are included only when their private IOAVService match is high-confidence. AmbientSync labels these controls **unverified (write-only)** and uses a persisted assumed VCP maximum of 100 by default; Settings supports 100, 255, or a custom maximum from 1 through 65535. Three consecutive transport write failures pause that display until re-enumeration or explicit Retry. Discovery and lifecycle rebuilds do not issue brightness writes.
+
+## Screenshot
+
+<img src="docs/assets/settings-screenshot.png" width="720" alt="AmbientSync settings showing brightness synchronization, Light/Dark thresholds, and external display controls">
+
+Illustrative settings; display status depends on hardware, and Launch at Login availability depends on the app installation. This example shows an unverified (write-only) external display and unavailable Launch at Login, not verification of all displays.
+
+## FAQ
+
+### Which external monitors are supported?
+
+AmbientSync supports external monitors with compatible DDC/CI brightness controls; support depends on the display, adapter, and connection. See [Privacy and security](#privacy-and-security) for hardware-validation and private-API caveats.
+
+### What triggers Light/Dark switching?
+
+AmbientSync switches system appearance when built-in display brightness reaches your configured Dark or Light threshold, not from direct ambient-light sensor measurement. See [Usage](#usage) for the available settings.
+
+### Does AmbientSync work offline?
+
+Yes. AmbientSync makes no network requests and includes no analytics, telemetry, or data collection; see [Privacy and security](#privacy-and-security).
 
 ## Build and test
 
@@ -63,7 +88,7 @@ For interactive local use, open `AmbientSync.xcodeproj` in Xcode. Use local ad-h
 
 ## Usage
 
-Launch AmbientSync from Xcode or a locally built app. Use the menu-bar icon for **Settings…** and **Quit AmbientSync**. Settings includes brightness synchronization, detected display status, per-display minimum and maximum mapping, write-only assumed maximum controls, degraded-state Retry, Dark and Light thresholds, Launch at Login, menu-icon visibility, and appearance-automation status.
+Launch AmbientSync after installing it with Homebrew or the GitHub Releases DMG, or run it from Xcode or a locally built app. Use the menu-bar icon for **Settings…** and **Quit AmbientSync**. Settings includes brightness synchronization, detected display status, per-display minimum and maximum mapping, write-only assumed maximum controls, degraded-state Retry, Dark and Light thresholds, Launch at Login, menu-icon visibility, and appearance-automation status.
 
 To hide the menu icon, turn off **Show menu-bar icon** in Settings. If it is hidden, reopen the already-running app from Finder, Spotlight, or Launchpad to show Settings and recover access. A 10–80% mapping produces 10%, 45%, and 80% external targets for internal brightness values of 0%, 50%, and 100%.
 

@@ -51,6 +51,8 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
 
     private var documentView: SettingsDocumentView?
     private var contentStack: NSStackView?
+    private var contentWidthConstraint: NSLayoutConstraint?
+    private var isReflowingDocument = false
     private var displayStack: NSStackView?
     private var appearanceStatusLabel: NSTextField?
     private var loginStatusLabel: NSTextField?
@@ -110,6 +112,7 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
     func update(appearanceStatus: AppearanceAutomationStatus) {
         self.appearanceStatus = appearanceStatus
         appearanceStatusLabel?.stringValue = appearanceStatus.userMessage
+        reflowDocument()
     }
 
     func updateLoginItem(enabled: Bool, statusMessage: String?) {
@@ -129,11 +132,13 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         window.minSize = NSSize(width: 560, height: 480)
         window.isReleasedWhenClosed = false
         window.delegate = self
+        window.backgroundColor = .windowBackgroundColor
 
-        let rootView = NSView(frame: NSRect(x: 0, y: 0, width: 620, height: 680))
+        let rootView = SettingsBackgroundView(frame: NSRect(x: 0, y: 0, width: 620, height: 680))
         let scrollView = NSScrollView(frame: rootView.bounds)
         scrollView.autoresizingMask = [.width, .height]
         scrollView.hasVerticalScroller = true
+        scrollView.hasHorizontalScroller = false
         scrollView.autohidesScrollers = true
         scrollView.drawsBackground = false
 
@@ -141,8 +146,15 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         let contentStack = NSStackView()
         contentStack.orientation = .vertical
         contentStack.alignment = .leading
-        contentStack.spacing = 16
+        contentStack.spacing = 20
+        contentStack.translatesAutoresizingMaskIntoConstraints = false
         documentView.addSubview(contentStack)
+        contentWidthConstraint = contentStack.widthAnchor.constraint(equalToConstant: 572)
+        NSLayoutConstraint.activate([
+            contentStack.leadingAnchor.constraint(equalTo: documentView.leadingAnchor, constant: 24),
+            contentStack.topAnchor.constraint(equalTo: documentView.topAnchor, constant: 24),
+            contentWidthConstraint!
+        ])
         scrollView.documentView = documentView
         rootView.addSubview(scrollView)
         window.contentView = rootView
@@ -150,6 +162,13 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         self.documentView = documentView
         self.contentStack = contentStack
         self.window = window
+        scrollView.contentView.postsFrameChangedNotifications = true
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(viewportDidResize(_:)),
+            name: NSView.frameDidChangeNotification,
+            object: scrollView.contentView
+        )
 
         buildStaticContent()
         rebuildDisplayRows()
@@ -161,14 +180,25 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
     private func buildStaticContent() {
         guard let contentStack else { return }
 
-        contentStack.addArrangedSubview(label("AmbientSync", font: .boldSystemFont(ofSize: 20)))
-        contentStack.addArrangedSubview(
-            label(
-                "Synchronize built-in brightness with supported external displays and system appearance.",
-                wrapping: true
-            )
-        )
-        contentStack.addArrangedSubview(label("Global", font: .boldSystemFont(ofSize: 15)))
+        let icon = NSImageView()
+        icon.image = NSImage(named: NSImage.Name("AppIcon"))
+            ?? Bundle.main.url(forResource: "AppIcon", withExtension: "icns").flatMap { NSImage(contentsOf: $0) }
+        icon.imageScaling = .scaleProportionallyUpOrDown
+        icon.setAccessibilityElement(false)
+        icon.widthAnchor.constraint(equalToConstant: 56).isActive = true
+        icon.heightAnchor.constraint(equalToConstant: 56).isActive = true
+        let headerText = verticalStack(spacing: 4)
+        headerText.addArrangedSubview(label("AmbientSync", font: .systemFont(ofSize: 20, weight: .semibold)))
+        let description = label("Sync brightness with supported external displays and adjust system appearance.", wrapping: true)
+        description.textColor = .secondaryLabelColor
+        addFullWidth(description, to: headerText)
+        let header = NSStackView(views: [icon, headerText])
+        header.orientation = .horizontal
+        header.alignment = .top
+        header.spacing = 12
+        addFullWidth(header, to: contentStack)
+
+        let global = verticalStack(spacing: 6)
 
         let brightnessCheckbox = NSButton(
             checkboxWithTitle: "Enable brightness synchronization",
@@ -177,7 +207,22 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         )
         brightnessCheckbox.setAccessibilityLabel("Enable brightness synchronization")
         self.brightnessSyncCheckbox = brightnessCheckbox
-        contentStack.addArrangedSubview(brightnessCheckbox)
+        global.addArrangedSubview(brightnessCheckbox)
+        global.setCustomSpacing(12, after: brightnessCheckbox)
+        let separator = NSBox()
+        separator.boxType = .separator
+        addFullWidth(separator, to: global)
+        global.setCustomSpacing(10, after: separator)
+        let thresholdsHeading = label("Appearance thresholds", font: .systemFont(ofSize: 12, weight: .medium))
+        thresholdsHeading.textColor = .secondaryLabelColor
+        global.addArrangedSubview(thresholdsHeading)
+        let thresholdsHelp = label(
+            "Uses built-in display brightness. At or below the Dark threshold, AmbientSync requests Dark Mode; at or above the Light threshold, it requests Light Mode. Brightness between the thresholds does not trigger a new appearance change.",
+            font: .systemFont(ofSize: 12),
+            wrapping: true
+        )
+        thresholdsHelp.textColor = .secondaryLabelColor
+        addFullWidth(thresholdsHelp, to: global)
 
         let darkSlider = makePercentageSlider(action: #selector(thresholdChanged(_:)))
         let lightSlider = makePercentageSlider(action: #selector(thresholdChanged(_:)))
@@ -187,22 +232,25 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         let lightValue = valueLabel()
         self.darkThresholdValueLabel = darkValue
         self.lightThresholdValueLabel = lightValue
-        contentStack.addArrangedSubview(
+        addFullWidth(
             sliderRow(
                 title: "Dark threshold",
                 slider: darkSlider,
                 valueLabel: darkValue,
                 accessibilityLabel: "Dark appearance threshold"
-            )
+            ), to: global
         )
-        contentStack.addArrangedSubview(
+        addFullWidth(
             sliderRow(
                 title: "Light threshold",
                 slider: lightSlider,
                 valueLabel: lightValue,
                 accessibilityLabel: "Light appearance threshold"
-            )
+            ), to: global
         )
+        addSection("Global", body: card(global), to: contentStack)
+        let startup = verticalStack(spacing: 10)
+        let login = verticalStack(spacing: 4)
 
         let launchCheckbox = NSButton(
             checkboxWithTitle: "Launch at Login",
@@ -211,12 +259,15 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         )
         launchCheckbox.setAccessibilityLabel("Launch AmbientSync at Login")
         self.launchAtLoginCheckbox = launchCheckbox
-        contentStack.addArrangedSubview(launchCheckbox)
-        let loginStatusLabel = label("", wrapping: true)
+        login.addArrangedSubview(launchCheckbox)
+        let loginStatusLabel = label("", font: .systemFont(ofSize: 12), wrapping: true)
         loginStatusLabel.textColor = .secondaryLabelColor
         loginStatusLabel.isHidden = true
         self.loginStatusLabel = loginStatusLabel
-        contentStack.addArrangedSubview(loginStatusLabel)
+        login.addArrangedSubview(loginStatusLabel)
+        loginStatusLabel.leadingAnchor.constraint(equalTo: login.leadingAnchor, constant: 20).isActive = true
+        loginStatusLabel.trailingAnchor.constraint(equalTo: login.trailingAnchor).isActive = true
+        addFullWidth(login, to: startup)
 
         let menuCheckbox = NSButton(
             checkboxWithTitle: "Show menu-bar icon",
@@ -225,20 +276,21 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         )
         menuCheckbox.setAccessibilityLabel("Show AmbientSync menu-bar icon")
         self.menuBarIconCheckbox = menuCheckbox
-        contentStack.addArrangedSubview(menuCheckbox)
+        startup.addArrangedSubview(menuCheckbox)
+        addSection("Startup & menu bar", body: card(startup), to: contentStack)
 
-        contentStack.addArrangedSubview(label("Displays", font: .boldSystemFont(ofSize: 15)))
         let displayStack = NSStackView()
         displayStack.orientation = .vertical
         displayStack.alignment = .leading
         displayStack.spacing = 10
         self.displayStack = displayStack
-        contentStack.addArrangedSubview(displayStack)
+        addSection("Displays", body: displayStack, to: contentStack)
 
-        contentStack.addArrangedSubview(label("Appearance automation", font: .boldSystemFont(ofSize: 15)))
-        let appearanceStatusLabel = label("", wrapping: true)
+        let automation = verticalStack(spacing: 10)
+        let appearanceStatusLabel = label("", font: .systemFont(ofSize: 12), wrapping: true)
+        appearanceStatusLabel.textColor = .secondaryLabelColor
         self.appearanceStatusLabel = appearanceStatusLabel
-        contentStack.addArrangedSubview(appearanceStatusLabel)
+        addFullWidth(appearanceStatusLabel, to: automation)
 
         let openAutomationButton = NSButton(
             title: "Open Automation Settings",
@@ -247,7 +299,49 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         )
         openAutomationButton.bezelStyle = .rounded
         openAutomationButton.setAccessibilityLabel("Open Automation Settings")
-        contentStack.addArrangedSubview(openAutomationButton)
+        automation.addArrangedSubview(openAutomationButton)
+        addSection("Appearance automation", body: card(automation), to: contentStack)
+    }
+
+    private func verticalStack(spacing: CGFloat) -> NSStackView {
+        let stack = NSStackView()
+        stack.orientation = .vertical
+        stack.alignment = .leading
+        stack.spacing = spacing
+        return stack
+    }
+
+    private func addFullWidth(_ view: NSView, to stack: NSStackView) {
+        stack.addArrangedSubview(view)
+        view.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
+    }
+
+    private func addSection(_ title: String, body: NSView, to stack: NSStackView) {
+        let section = verticalStack(spacing: 8)
+        section.addArrangedSubview(label(title, font: .systemFont(ofSize: 13, weight: .semibold)))
+        addFullWidth(body, to: section)
+        addFullWidth(section, to: stack)
+    }
+
+    private func card(_ stack: NSStackView) -> NSBox {
+        let box = NSBox()
+        box.boxType = .custom
+        box.titlePosition = .noTitle
+        box.cornerRadius = 8
+        box.borderWidth = 1
+        box.borderColor = .separatorColor
+        box.fillColor = .controlBackgroundColor
+        box.contentViewMargins = .zero
+        guard let content = box.contentView else { return box }
+        stack.translatesAutoresizingMaskIntoConstraints = false
+        content.addSubview(stack)
+        NSLayoutConstraint.activate([
+            stack.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: 14),
+            stack.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -14),
+            stack.topAnchor.constraint(equalTo: content.topAnchor, constant: 14),
+            stack.bottomAnchor.constraint(equalTo: content.bottomAnchor, constant: -14)
+        ])
+        return box
     }
 
     private func rebuildDisplayRows() {
@@ -259,7 +353,7 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         displayRows.removeAll(keepingCapacity: true)
 
         if snapshot.displays.isEmpty {
-            displayStack.addArrangedSubview(label("No displays detected yet.", wrapping: true))
+            addFullWidth(label("No displays detected yet.", wrapping: true), to: displayStack)
             reflowDocument()
             return
         }
@@ -267,7 +361,7 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         for state in snapshot.displays {
             let row = makeDisplayRow(state)
             displayRows.append(row)
-            displayStack.addArrangedSubview(rowView(for: row))
+            addFullWidth(rowView(for: row), to: displayStack)
         }
         reflowDocument()
     }
@@ -337,66 +431,71 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         let stack = NSStackView()
         stack.orientation = .vertical
         stack.alignment = .leading
-        stack.spacing = 5
+        stack.spacing = 6
 
-        let title = label(row.state.record.name, font: .systemFont(ofSize: 13, weight: .medium))
+        let title = label(row.state.record.name, font: .systemFont(ofSize: 13, weight: .semibold), wrapping: true)
         title.setAccessibilityLabel(row.state.record.name)
-        stack.addArrangedSubview(title)
+        addFullWidth(title, to: stack)
+        stack.setCustomSpacing(4, after: title)
 
         let statusText: String
         statusText = row.state.support.userFacingLabel
-        let status = label(statusText, wrapping: true)
-        status.textColor = row.state.support == .unsupportedExternal
-            ? .secondaryLabelColor
-            : (row.state.support.isDegraded ? .systemOrange : .labelColor)
-        stack.addArrangedSubview(status)
+        let status = label(statusText, font: .systemFont(ofSize: 12), wrapping: true)
+        status.textColor = row.state.support.isDegraded ? .labelColor : .secondaryLabelColor
+        addFullWidth(status, to: stack)
+        stack.setCustomSpacing(10, after: status)
 
         guard let minimumSlider = row.minimumSlider,
               let maximumSlider = row.maximumSlider,
               let minimumLabel = row.minimumValueLabel,
               let maximumLabel = row.maximumValueLabel
         else {
-            return stack
+            return card(stack)
         }
 
-        stack.addArrangedSubview(
+        addFullWidth(
             sliderRow(
                 title: "Minimum",
                 slider: minimumSlider,
                 valueLabel: minimumLabel,
                 accessibilityLabel: "Minimum brightness for \(row.state.record.name)"
-            )
+            ), to: stack
         )
-        stack.addArrangedSubview(
+        addFullWidth(
             sliderRow(
                 title: "Maximum",
                 slider: maximumSlider,
                 valueLabel: maximumLabel,
                 accessibilityLabel: "Maximum brightness for \(row.state.record.name)"
-            )
+            ), to: stack
         )
 
         if let popup = row.assumedMaximumPopup,
            let field = row.assumedMaximumField {
-            let assumedTitle = label("Assumed maximum")
+            stack.setCustomSpacing(8, after: stack.arrangedSubviews.last!)
+            let assumedTitle = label("Assumed maximum", wrapping: true)
             assumedTitle.widthAnchor.constraint(equalToConstant: 125).isActive = true
             let assumedRow = NSStackView(views: [assumedTitle, popup, field])
             assumedRow.orientation = .horizontal
             assumedRow.alignment = .centerY
             assumedRow.spacing = 8
             stack.addArrangedSubview(assumedRow)
-            stack.addArrangedSubview(
+            stack.setCustomSpacing(4, after: assumedRow)
+            let caveat =
                 label(
                     "Used for write-only VCP scaling; hardware maximum is unverified.",
+                    font: .systemFont(ofSize: 12),
                     wrapping: true
                 )
-            )
+            caveat.textColor = .secondaryLabelColor
+            addFullWidth(caveat, to: stack)
         }
 
         if let retryButton = row.retryButton {
+            stack.setCustomSpacing(8, after: stack.arrangedSubviews.last!)
             stack.addArrangedSubview(retryButton)
         }
-        return stack
+        return card(stack)
     }
 
     private func refreshControls() {
@@ -414,23 +513,43 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         menuBarIconCheckbox?.state = settings.menuBarIconVisible ? .on : .off
         refreshLoginControls()
         appearanceStatusLabel?.stringValue = appearanceStatus.userMessage
+        reflowDocument()
     }
 
     private func refreshLoginControls() {
         launchAtLoginCheckbox?.state = loginItemEnabled ? .on : .off
         loginStatusLabel?.stringValue = loginStatusMessage ?? ""
         loginStatusLabel?.isHidden = loginStatusMessage == nil
+        reflowDocument()
     }
 
     private func reflowDocument() {
-        guard let documentView, let contentStack else { return }
-        contentStack.layoutSubtreeIfNeeded()
-        let fittingSize = contentStack.fittingSize
-        let width = max(documentView.bounds.width, 620)
-        let height = max(fittingSize.height + 48, 680)
-        documentView.setFrameSize(NSSize(width: width, height: height))
-        contentStack.frame = NSRect(x: 24, y: 24, width: width - 48, height: fittingSize.height)
+        guard !isReflowingDocument, let documentView, let contentStack,
+              let scrollView = documentView.enclosingScrollView else { return }
+        isReflowingDocument = true
+        defer { isReflowingDocument = false }
+        // A legacy scroller can appear after measuring the content height. Measure
+        // again with its actual viewport width so it never covers the document.
+        for _ in 0..<2 {
+            scrollView.tile()
+            let viewport = scrollView.contentView
+            let width = viewport.bounds.width
+            contentWidthConstraint?.constant = max(0, width - 48)
+            documentView.setFrameSize(NSSize(width: width, height: documentView.frame.height))
+            documentView.layoutSubtreeIfNeeded()
+            contentStack.layoutSubtreeIfNeeded()
+            let height = max(contentStack.fittingSize.height + 48, viewport.bounds.height)
+            documentView.setFrameSize(NSSize(width: width, height: height))
+        }
         documentView.needsLayout = true
+    }
+
+    func windowDidResize(_ notification: Notification) {
+        reflowDocument()
+    }
+
+    @objc private func viewportDidResize(_ notification: Notification) {
+        reflowDocument()
     }
 
     private func makePercentageSlider(action: Selector) -> NSSlider {
@@ -438,7 +557,8 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         slider.isContinuous = true
         slider.numberOfTickMarks = 11
         slider.translatesAutoresizingMaskIntoConstraints = false
-        slider.widthAnchor.constraint(equalToConstant: 220).isActive = true
+        slider.widthAnchor.constraint(greaterThanOrEqualToConstant: 180).isActive = true
+        slider.setContentHuggingPriority(.defaultLow, for: .horizontal)
         return slider
     }
 
@@ -470,7 +590,7 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         valueLabel: NSTextField,
         accessibilityLabel: String
     ) -> NSView {
-        let titleLabel = label(title)
+        let titleLabel = label(title, wrapping: true)
         titleLabel.widthAnchor.constraint(equalToConstant: 125).isActive = true
         slider.setAccessibilityLabel(accessibilityLabel)
         valueLabel.widthAnchor.constraint(equalToConstant: 52).isActive = true
@@ -478,6 +598,7 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         row.orientation = .horizontal
         row.alignment = .centerY
         row.spacing = 8
+        row.heightAnchor.constraint(greaterThanOrEqualToConstant: 28).isActive = true
         return row
     }
 
@@ -490,11 +611,16 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         field.font = font
         field.lineBreakMode = .byWordWrapping
         field.maximumNumberOfLines = wrapping ? 0 : 1
+        field.textColor = .labelColor
+        if wrapping {
+            field.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        }
         return field
     }
 
     private func valueLabel() -> NSTextField {
         let field = label("0%")
+        field.font = .monospacedDigitSystemFont(ofSize: 13, weight: .regular)
         field.alignment = .right
         return field
     }
@@ -615,4 +741,12 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
 @MainActor
 private final class SettingsDocumentView: NSView {
     override var isFlipped: Bool { true }
+}
+
+@MainActor
+private final class SettingsBackgroundView: NSView {
+    override func draw(_ dirtyRect: NSRect) {
+        NSColor.windowBackgroundColor.setFill()
+        dirtyRect.fill()
+    }
 }

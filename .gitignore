@@ -4,6 +4,9 @@
 # Local OpenCode project state
 .opencode/
 
+# Local Impeccable critique artifacts
+.impeccable/
+
 # Generated CodeGraph index
 .codegraph/
 
